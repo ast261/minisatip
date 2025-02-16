@@ -241,9 +241,11 @@ typedef enum dvb_snr_table {
     DVB_T2_QAM256_OTHER = 280,
 } dvb_snr_table_t;
 
+#ifndef AXE
 #if DVBAPIVERSION < 0x0505
 #define DTV_ENUM_DELSYS 44
 #define SYS_DVBC_ANNEX_A SYS_DVBC_ANNEX_AC
+#endif
 #endif
 
 #ifndef SYS_DVBC2
