@@ -41,6 +41,10 @@
 #include "utils.h"
 #include "utils/ticks.h"
 
+#ifdef AXE
+#include "axe.h"
+#endif
+
 #ifndef DISABLE_SATIPCLIENT
 #include "satipc.h"
 #endif
@@ -136,6 +140,9 @@ void find_adapters() {
 #ifndef DISABLE_NETCVCLIENT
     find_netcv_adapter(a);
 #endif
+#ifdef AXE
+    find_axe_adapter(a);
+#endif
 #ifndef DISABLE_DDCI
     find_ddci_adapter(a);
 #endif
@@ -165,6 +172,7 @@ int adapter_timeout(sockets *s) {
         return 0;
     }
 
+#ifndef AXE
     int64_t rtime = getTick(), max_close = rtime - ad->adapter_timeout + 2000;
     int i;
     for (i = 0; i < MAX_ADAPTERS; i++)
@@ -181,6 +189,7 @@ int adapter_timeout(sockets *s) {
         s->sid, ad->adapter_timeout / 1000, do_close, max_close);
     if (!do_close)
         s->rtime = max_close;
+#endif    
     return do_close;
 }
 
@@ -406,9 +415,11 @@ int close_adapter(int na) {
     ad->snr = 0;
     ad->db = MAX_DB;
     ad->db_snr_map = 1.0;
+#ifndef AXE
     ad->old_diseqc = -1;
     ad->old_hiband = -1;
     ad->old_pol = -1;
+#endif    
     sock = ad->sock;
     ad->sock = -1;
     if (sock >= 0) // avoid locking the socket after the adapter

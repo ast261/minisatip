@@ -1031,13 +1031,17 @@ int process_dmx(sockets *s) {
          "%jd ms ago",
          ad->id, rlen, s->lbuf, ms_ago);
 
+#ifndef AXE
     check_cc(ad);
+#endif    
 
 #ifndef DISABLE_TABLES
     pmt_process_stream(ad);
 #endif
 
+#ifndef AXE
     check_cc2(ad);
+#endif    
 
     for (i = 0; i < MAX_STREAMS; i++)
         if (st[i] && st[i]->enabled && st[i]->adapter == ad->id)

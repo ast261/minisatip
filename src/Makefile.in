@@ -11,6 +11,7 @@ NETCVCLIENT=@NETCVCLIENT@
 STATIC=@STATIC@
 DVBAPI=@DVBAPI@
 LINUXDVB=@LINUXDVB@
+AXE=@AXE@
 DDCI=0
 
 CXXFLAGS?=-Wall -Wno-date-time -Wno-switch -ggdb -fPIC -fno-common -Warray-bounds
@@ -121,6 +122,11 @@ ifeq ($(DDCI),1)
 SOURCES+=ddci.cpp
 else
 CXXFLAGS+=-DDISABLE_DDCI
+endif
+
+ifeq ($(AXE),1)
+SOURCES+=axe.cpp
+CXXFLAGS+=-DAXE
 endif
 
 ifeq ($(DEBUG),1)

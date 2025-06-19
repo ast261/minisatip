@@ -37,5 +37,8 @@ _symbols *sym[] = {adapters_sym, stream_sym, minisatip_sym, alloc_sym,
 #ifndef DISABLE_PMT
                    pmt_sym,
 #endif
+#ifdef AXE
+                   axe_sym,
+#endif
 
                    NULL};

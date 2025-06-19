@@ -31,6 +31,7 @@ DVBCSA=0
 NETCVCLIENT=0
 SATIPCLIENT=0
 STATIC=0
+AXE=0
 DVBAPI=0
 
 AC_ARG_ENABLE([linuxdvb],
@@ -152,6 +153,19 @@ else
 FM="$FM\n$dvbapi disabled"
 fi
 
+AC_ARG_ENABLE([axe],
+  [AS_HELP_STRING([--enable-axe],
+  [enable compilation for axe: Inverto IDL400])])
+
+AS_IF([test "x$enable_axe" = "xyes"], [
+AXE=1
+])
+  
+if test "$AXE" = "1"; then
+FM="$FM\n$axe enabled"
+else
+FM="$FM\n$axe disabled"
+fi
 
 ac_save_CXXFLAGS="$CFLAGS"
 CXXFLAGS="$CFLAGS -fstrict-flex-arrays"
@@ -183,6 +197,7 @@ AC_SUBST(NETCVCLIENT)
 AC_SUBST(SATIPCLIENT)
 AC_SUBST(STATIC)
 AC_SUBST(DVBAPI)
+AC_SUBST(AXE)
 
 AC_CONFIG_FILES([src/Makefile])
 AC_CONFIG_FILES([tests/Makefile])

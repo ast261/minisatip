@@ -402,6 +402,7 @@
 			var max_adapters = state['ad_enabled'].length;
 			var max_streams = state['st_enabled'].length;
 			var max_keys = 'key_enabled' in state ? state['key_enabled'].length : 0;
+			var has_axe = state['has_axe'];
 
 			var myTable = "<table id='myTable' class='display cell-border compact' cellspacing='0' width='100%'>";
 			myTable += "<thead><tr><th style='width:30px;max-width:40px'>Tun.</th>";
@@ -414,6 +415,11 @@
 			myTable += "<th style='width:120px;max-width:100%' class='dt-left'>Streams</th>";
 			myTable += "<th style='width:100px;max-width:130px' class='dt-left'>Cryptinfo</th>";
 			myTable += "</tr></thead><tbody>";
+			if (has_axe) {
+				myTable += "<th class='dt-right'>Packets</th>";
+				myTable += "<th class='dt-right'>CC Errors</th>";
+				myTable += "<th class='dt-right'>Coax Cable</th>";
+			}
 
 			for (var i = 0; i < max_adapters; i++) {
 				if (state['ad_type'][i] == 0)
@@ -527,6 +533,13 @@
 				}
 				myTable += "<td class='dt-right'>" + signal + " </td>";
 
+				// AXE
+				if (has_axe) {
+					myTable += "<td class='dt-right'>" + state['ad_axe_pktc'][i] + " </td>";
+					myTable += "<td class='dt-right'>" + state['ad_axe_ccerr'][i] + " </td>";
+					myTable += "<td class='dt-right'>" + state['ad_axe_coax'][i] + " </td>";
+				                                                                }
+                                                                                                
 				// STREAMS
 				myTable += "<td class='dt-left'>";
 				if (state['has_pmt']) {

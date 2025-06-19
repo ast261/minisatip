@@ -650,6 +650,7 @@ ac_includes_default="\
 ac_header_c_list=
 ac_subst_vars='LTLIBOBJS
 LIBOBJS
+AXE
 DVBAPI
 STATIC
 SATIPCLIENT
@@ -718,6 +719,7 @@ with_xml2
 enable_satipc
 enable_static
 enable_dvbapi
+enable_axe
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1356,6 +1358,7 @@ Optional Features:
   --disable-satipc        disable satip client support
   --enable-static         enable static compilation
   --disable-dvbapi        disable dvbapi protocol support
+  --enable-axe            enable compilation for axe: Inverto IDL400
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -4008,6 +4011,7 @@ DVBCSA=0
 NETCVCLIENT=0
 SATIPCLIENT=0
 STATIC=0
+AXE=0
 DVBAPI=0
 
 # Check whether --enable-linuxdvb was given.
@@ -4272,6 +4276,25 @@ else
 FM="$FM\n$dvbapi disabled"
 fi
 
+# Check whether --enable-axe was given.
+if test ${enable_axe+y}
+then :
+  enableval=$enable_axe;
+fi
+
+
+if test "x$enable_axe" = "xyes"
+then :
+
+AXE=1
+
+fi
+
+if test "$AXE" = "1"; then
+FM="$FM\n$axe enabled"
+else
+FM="$FM\n$axe disabled"
+fi
 
 ac_save_CXXFLAGS="$CFLAGS"
 CXXFLAGS="$CFLAGS -fstrict-flex-arrays"
