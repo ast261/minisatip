@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Minisatip is a multi-threaded SAT>IP v1.2 server written in C (GNU99). It bridges Linux DVB hardware to SAT>IP clients (Tvheadend, DVBViewer, etc.) over a network. The active branch (`idl4k`) focuses on the **Inverto IDL4k / AXE platform** — a set-top-box hardware with 4 DVB-S2 tuners that uses a custom kernel driver instead of the standard Linux DVB API.
+Minisatip is a multi-threaded SAT>IP v1.2 server written in C++. It bridges Linux DVB hardware to SAT>IP clients (Tvheadend, DVBViewer, etc.) over a network. The active branch (`idl4k-v2`) focuses on the **Inverto IDL4k / AXE platform** — a set-top-box hardware with 4 DVB-S2 tuners that uses a custom kernel driver instead of the standard Linux DVB API.
 
 ## Build Commands
 
@@ -20,15 +20,15 @@ Key `./configure` flags: `--enable-axe`, `--enable-dvbcsa`, `--enable-dvbca`, `-
 
 ## Running Tests
 
-`make test` compiles and immediately runs each test binary in `tests/`. Tests are compiled with `-DTESTING -DAXE`, sanitizers, and link all `src/*.c`. To run a single test file:
+`make test` compiles and immediately runs each test binary in `tests/`. Tests are compiled with `-DTESTING`, sanitizers, and link all `src/*.cpp`. To run a single test file:
 
 ```bash
-cd tests && gcc -Wall -ggdb -DTESTING -DAXE -I../src -fsanitize=address \
-    test_adapter.c $(find ../src -name '*.c') -o /tmp/t \
+cd tests && g++ -Wall -ggdb -DTESTING -I../src -fsanitize=address \
+    test_adapter.cpp $(find ../src -name '*.cpp') -o /tmp/t \
     -lpthread -lrt -lcrypto -ldl && /tmp/t
 ```
 
-## AXE Subsystem (`src/axe.c`, `src/axe.h`)
+## AXE Subsystem (`src/axe.cpp`, `src/axe.h`)
 
 The AXE platform replaces the standard Linux DVB device tree with its own device nodes and ioctls. Everything below is specific to this hardware and does not apply to generic DVB adapters.
 
@@ -114,24 +114,23 @@ Reads signal via `get_signal_old()` (the legacy DVB API ioctl path), then rescal
 
 Reads `/proc/STAPI/stpti/PTI{aid}/vDeviceInfo` every 1 second to get packet count (`axe_pktc`) and continuity-counter errors (`axe_ccerr`). Exposed as `ad_axe_pktc`, `ad_axe_ccerr`, `ad_axe_coax` symbols in the web UI via `axe_sym[]`.
 
-### `frontend.h` Patch (IDL4k branch)
-
-`src/frontend.h` was patched in commit `6f784a8` to make the AXE frontend compile on IDL4k. If upstreaming patches, check this file for local deviations from the kernel header.
-
 ## General Architecture
 
 **Data flow:** SAT>IP client → RTSP/HTTP → `socketworks` (poll loop) → `stream` (session) → `adapter` → AXE ioctls → TS packets → RTP/HTTP back to client.
 
-- `src/adapter.c/.h` — manages up to 64 adapters; `struct_adapter` holds `fe`/`dvr` fds, `pa` (physical index), `axe_used` bitmask, LNB/diseqc config
-- `src/stream.c/.h` — up to 256 client sessions; PID filtering per client; RTP sequencing
-- `src/socketworks.c/.h` — poll-based multiplexer; all I/O via callback-driven `struct_sockets`
-- `src/dvb.c/.h` — standard Linux DVB API path (not used on AXE hardware)
-- `src/minisatip.c` — main loop, RTSP state machine, SSDP, HTTP XML descriptor
+- `src/adapter.cpp/.h` — manages up to 100 adapters; `struct_adapter` holds `fe`/`dvr` fds, `pa` (physical index), `axe_used` bitmask, LNB/diseqc config
+- `src/stream.cpp/.h` — up to 256 client sessions; PID filtering per client; RTP sequencing
+- `src/socketworks.cpp/.h` — poll-based multiplexer; all I/O via callback-driven `struct_sockets`
+- `src/dvb.cpp/.h` — standard Linux DVB API path (not used on AXE hardware)
+- `src/minisatip.cpp/.h` — main loop, RTSP state machine, SSDP, HTTP XML descriptor
+- `src/opts.cpp/.h` — command-line option parsing; AXE-specific opts: `quattro`, `quattro_hiband`, `axe_power`
+- `src/api/symbols.cpp/.h`, `src/api/variables.cpp/.h` — web UI symbol/variable registry
 - `src/utils/` — alloc, fifo, hash_table, mutex, ticks, uuid
+- `src/utils/dvb/` — DVB charset and SI table support (`dvb_support.cpp/.h`)
 
 ## Key Conventions
 
 - `-DAXE` compile flag enables AXE support; `#ifdef AXE` blocks in `adapter.h` add `axe_used`, `axe_pktc`, `axe_ccerr`, `axe_vdevice_last_sync` fields to `struct_adapter`
 - `TESTING` macro gates test-only code paths throughout `src/`
-- Logging: module name `LOG_AXE` is the default in `axe.c`; pass `-l axe` at runtime for verbose, `-v axe` for debug
+- Logging: module name `LOG_AXE` is the default in `axe.cpp`; pass `-l axe` at runtime for verbose, `-v axe` for debug
 - Default ports: RTSP 554 (needs root), HTTP 8080, RTP base 5500

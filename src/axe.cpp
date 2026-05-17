@@ -47,8 +47,6 @@
 
 #define DEFAULT_LOG LOG_AXE
 
-#ifndef DISABLE_LINUXDVB
-
 // satip-axe support DVB-S2X: https://github.com/perexg/satip-axe/issues/126
 #ifndef DTV_SCRAMBLING_SEQUENCE_INDEX
 #define DTV_SCRAMBLING_SEQUENCE_INDEX 70
@@ -937,5 +935,3 @@ _symbols axe_sym[] = {{"ad_axe_pktc", VAR_FUNCTION_INT64, (void *)&get_axe_pktc,
                       {"ad_axe_coax", VAR_FUNCTION_STRING,
                        (void *)&get_axe_coax, 0, MAX_ADAPTERS, 0},
                       {NULL, 0, NULL, 0, 0, 0}};
-
-#endif // #ifndef DISABLE_LINUXDVB
