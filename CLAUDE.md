@@ -9,22 +9,43 @@ Minisatip is a multi-threaded SAT>IP v1.2 server written in C++. It bridges Linu
 ## Build Commands
 
 ```bash
-./configure              # auto-detects available libs (openssl, libdvbcsa, libxml2)
-make                     # build minisatip binary
-make debug               # build with AddressSanitizer/LeakSanitizer/UBSan
-make test                # build and run all test suites
-make clean
+cmake -S . -B build                   # configure (auto-detects libs)
+cmake --build build                   # build minisatip binary
+cmake --build build -- VERBOSE=1      # show compiler commands
+cmake -S . -B build -DDEBUG=ON        # build with AddressSanitizer/UBSan
+cmake -S . -B build -DBUILD_TESTING=ON && cmake --build build && ctest --test-dir build
 ```
 
-Key `./configure` flags: `--enable-axe`, `--enable-dvbcsa`, `--enable-dvbca`, `--enable-dvbapi`, `--enable-satipc`, `--enable-netcv`, `--disable-linuxdvb`.
+Key cmake options (all default OFF unless a library is found):
+
+| Option | Effect |
+|--------|--------|
+| `-DAXE=ON` | AXE (Inverto IDL4k) platform support |
+| `-DDVBCSA=ON` | DVB-CSA descrambling (needs libdvbcsa) |
+| `-DDVBCA=ON` | DVB-CA / CI support (needs libcrypto) |
+| `-DDDCI=ON` | Dedicated CI; auto-enabled when DVBCA=ON on Linux |
+| `-DNETCVCLIENT=ON` | NetCeiver client (needs libnetceiver, libxml2) |
+| `-DLINUXDVB=OFF` | Disable Linux DVB API (default ON) |
+| `-DSRT=ON` | SRT streaming support (needs libsrt) |
+| `-DCXX23=ON` | C++23 stacktrace (needs libstdc++exp) |
+| `-DSTATIC=ON` | Static linking |
+| `-DDEBUG=ON` | AddressSanitizer / LeakSanitizer / UBSan |
 
 ## Running Tests
 
-`make test` compiles and immediately runs each test binary in `tests/`. Tests are compiled with `-DTESTING`, sanitizers, and link all `src/*.cpp`. To run a single test file:
+Tests are built and run via cmake:
 
 ```bash
-cd tests && g++ -Wall -ggdb -DTESTING -I../src -fsanitize=address \
-    test_adapter.cpp $(find ../src -name '*.cpp') -o /tmp/t \
+cmake -S . -B build -DBUILD_TESTING=ON
+cmake --build build
+ctest --test-dir build
+```
+
+To compile and run a single test file manually:
+
+```bash
+cd build && g++ -Wall -ggdb -DTESTING -I../src -fsanitize=address \
+    ../tests/test_adapter.cpp $(find ../src -name '*.cpp') -o /tmp/t \
     -lpthread -lrt -lcrypto -ldl && /tmp/t
 ```
 
@@ -130,7 +151,7 @@ Reads `/proc/STAPI/stpti/PTI{aid}/vDeviceInfo` every 1 second to get packet coun
 
 ## Key Conventions
 
-- `-DAXE` compile flag enables AXE support; `#ifdef AXE` blocks in `adapter.h` add `axe_used`, `axe_pktc`, `axe_ccerr`, `axe_vdevice_last_sync` fields to `struct_adapter`
+- `-DAXE` compile flag enables AXE support; emitted into `config.h` by cmake when `-DAXE=ON` is passed; `#ifdef AXE` blocks in `adapter.h` add `axe_used`, `axe_pktc`, `axe_ccerr`, `axe_vdevice_last_sync` fields to `struct_adapter`
 - `TESTING` macro gates test-only code paths throughout `src/`
 - Logging: module name `LOG_AXE` is the default in `axe.cpp`; pass `-l axe` at runtime for verbose, `-v axe` for debug
 - Default ports: RTSP 554 (needs root), HTTP 8080, RTP base 5500
