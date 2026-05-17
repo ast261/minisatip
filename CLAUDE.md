@@ -9,11 +9,7 @@ Minisatip is a multi-threaded SAT>IP v1.2 server written in C++. It bridges Linu
 ## Build Commands
 
 ```bash
-cmake -S . -B build \
-    -DCMAKE_CXX_COMPILER=${CXX} \
-    -DAXE=ON \
-    -DDVBCSA=ON \
-    -DNETCVCLIENT=OFF              # configure for AXE target
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-idl4k.cmake -DAXE=ON -DDVBCSA=ON -DNETCVCLIENT=OFF   # configure for AXE target
 cmake --build build                   # build minisatip binary
 cmake --build build -- VERBOSE=1      # show compiler commands
 cmake -S . -B build -DDEBUG=ON        # build with AddressSanitizer/UBSan
