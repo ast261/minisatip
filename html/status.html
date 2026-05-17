@@ -398,12 +398,12 @@
 			myTable += "<th style='width:100px;max-width:150px' class='dt-right'>Signal</th>";
 			myTable += "<th style='width:120px;max-width:100%' class='dt-left'>Streams</th>";
 			myTable += "<th style='width:100px;max-width:130px' class='dt-left'>Cryptinfo</th>";
-			myTable += "</tr></thead><tbody>";
 			if (has_axe) {
 				myTable += "<th class='dt-right'>Packets</th>";
 				myTable += "<th class='dt-right'>CC Errors</th>";
 				myTable += "<th class='dt-right'>Coax Cable</th>";
 			}
+			myTable += "</tr></thead><tbody>";
 
 			for (var i = 0; i < max_adapters; i++) {
 				if (state['ad_type'][i] == 0)

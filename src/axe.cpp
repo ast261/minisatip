@@ -857,7 +857,7 @@ int free_axe_input(adapter *ad) {
 }
 
 static char *axe_vdevice_read(int aid, char *buf, size_t buflen) {
-    size_t len;
+    ssize_t len;
     int i, fd;
     if (buflen < 1)
         return NULL;
@@ -871,6 +871,8 @@ static char *axe_vdevice_read(int aid, char *buf, size_t buflen) {
         }
         len = read(fd, buf, buflen - 1);
         close(fd);
+        if (len < 0)
+            continue;
         if (len > 200) {
             buf[len] = '\0';
             return buf;
