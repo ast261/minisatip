@@ -779,6 +779,13 @@ nostandby:
     return 0;
 }
 
+std::string axe_name(int aid, int fd) {
+    struct dvb_frontend_info fe_info;
+    if (ioctl(fd, FE_GET_INFO, &fe_info) < 0)
+        return "IDL4k/AXE";
+    return fe_info.name;
+}
+
 void find_axe_adapter(adapter **a) {
     int na = 0;
     char buf[100];
@@ -814,6 +821,7 @@ void find_axe_adapter(adapter **a) {
                 ad->close = axe_close;
                 ad->get_signal = axe_get_signal;
                 ad->wakeup = axe_wakeup;
+                ad->name = axe_name;
                 ad->type = ADAPTER_DVB;
                 ad->fast_status = 1;
                 ad->standby = free_axe_input;
