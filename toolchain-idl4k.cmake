@@ -1,7 +1,7 @@
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR sh4)
 
-set(TOOLCHAIN_DIR /home/axel/sync/software/satip-axe/toolchain/sh4-linux/sh4-idl4k-linux-gnu_sdk-buildroot)
+set(TOOLCHAIN_DIR $ENV{HOME}/sync/software/satip-axe/toolchain/sh4-linux/sh4-idl4k-linux-gnu_sdk-buildroot)
 
 set(CMAKE_CXX_COMPILER ${TOOLCHAIN_DIR}/bin/sh4-idl4k-linux-gnu-g++)
 set(CMAKE_C_COMPILER   ${TOOLCHAIN_DIR}/bin/sh4-idl4k-linux-gnu-gcc)
