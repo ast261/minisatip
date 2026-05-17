@@ -17,9 +17,6 @@
  * USA
  *
  */
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
-
 #include "ca.h"
 #include "ddci.h"
 #include "dvb.h"
@@ -63,14 +60,32 @@ extern ca_device_t *ca_devices[MAX_ADAPTERS];
 extern std::unordered_map<int, Sddci_channel> channels;
 extern SFilter *filters[MAX_FILTERS];
 
+// Forward declarations
+descriptor_t create_descriptor(const uint8_t *data);
+
+// Helpers
+descriptor_t create_ca_descriptor(uint16_t caid, uint16_t capid) {
+    uint8_t data[6];
+    data[0] = 0x09;
+    data[1] = 4;
+    copy16(data, 2, caid);
+    copy16(data, 4, capid);
+
+    return create_descriptor(data);
+}
+
 SPMT *create_pmt(int ad, int sid, int pid1, int pid2, int caid1, int caid2) {
     int pmt_id = pmt_add(ad, sid, 1000);
     SPMT *pmt = get_pmt(pmt_id);
     pmt->pid = pmt_id * 1000;
-    pmt_add_stream_pid(pmt, pid1, 2, 0, 1, 0);
-    pmt_add_stream_pid(pmt, pid2, 6, 1, 0, 0);
+    pmt_add_stream_pid(pmt, pid1, 2, false, true);
+    pmt_add_stream_pid(pmt, pid2, 6, true, false);
     pmt_add_caid(pmt, caid1, caid1, NULL, 0);
     pmt_add_caid(pmt, caid2, caid2, NULL, 0);
+    // Add a CA descriptor to the second stream PID so we can test that it
+    // gets added to the PMT correctly
+    pmt->stream_pids[1].descriptors.push_back(create_ca_descriptor(0x0B00, 0x0573));
+
     return pmt;
 }
 
@@ -119,7 +134,7 @@ int test_add_del_pmt() {
     SPMT *pmt0, *pmt1, *pmt2, *pmt3, *pmt4;
     ddci_device_t d0, d1;
     ca_device_t ca0, ca1;
-    adapter ad, a0, a1;
+    adapter ad = {0}, a0 = {0}, a1 = {0};
 
     create_adapter(&ad, 8);
     create_adapter(&a0, 0);
@@ -183,7 +198,7 @@ int test_add_del_pmt() {
     c->locked = 1;
     c->ddci[c->ddcis++].ddci = 1;
 
-    pmt_add_stream_pid(pmt2, 0xFF, 2, 0, 1, 0);
+    pmt_add_stream_pid(pmt2, 0xFF, 2, false, true);
     pmt_add_caid(pmt2, 0x502, 0xFE, NULL, 0);
 
     ASSERT(ddci_process_pmt(&ad, pmt2) == TABLES_RESULT_OK,
@@ -467,7 +482,7 @@ int test_create_pmt() {
     ddci_device_t d;
     uint8_t psi[188];
     uint8_t packet[188];
-    adapter ad;
+    adapter ad = {0};
     int16_t cc;
     int psi_len;
     SFilter f;
@@ -517,6 +532,18 @@ int test_create_pmt() {
         LOG_AND_RETURN(1, "PMT PSI pid %04X != mapping table pid %04X",
                        new_capid, dcapid);
 
+    // Verify stream PID descriptors
+    int es_info_len = packet[38];
+    ASSERT_EQUAL(6, es_info_len, "es info length mismatch");
+    int ca_descriptor_type = packet[39];
+    ASSERT_EQUAL(0x09, ca_descriptor_type, "descriptor type mismatch");
+    int ca_descriptor_len = packet[40];
+    ASSERT_EQUAL(4, ca_descriptor_len, "descriptor length mismatch");
+    int ca_descriptor_caid = packet[41] * 256 + packet[42];
+    int ca_descriptor_capid = (packet[43] & 0x1F) * 256 + packet[44];
+    ASSERT_EQUAL(0x0B00, ca_descriptor_caid, "descriptor CA system mismatch");
+    ASSERT_EQUAL(0x0573, ca_descriptor_capid, "descriptor CA PID mismatch");
+
     SPMT *new_pmt = get_pmt(pmt_add(0, 200, 200));
     ad.id = 0;
     ad.enabled = 1;
@@ -530,7 +557,7 @@ int test_create_pmt() {
     process_pmt(0, psi + 1, psi_len, new_pmt);
     filters[0] = NULL;
     ASSERT_EQUAL(
-        pmt->stream_pids, new_pmt->stream_pids,
+        pmt->stream_pids.size(), new_pmt->stream_pids.size(),
         "Number of streampids does not matches between generated PMT and "
         "read PMT");
     ASSERT_EQUAL(pmt->caids, new_pmt->caids,
@@ -540,11 +567,54 @@ int test_create_pmt() {
     return 0;
 }
 
+int test_process_cat() {
+    // Copied from Wireshark, PID 1 from 10934V @ 0.8W
+    uint8_t cat[] = {0x01, 0xb0, 0x21, 0xff, 0xff, 0xc5, 0x00, 0x00, 0x09,
+                     0x04, 0x0b, 0x00, 0xe0, 0x30, 0x09, 0x04, 0x09, 0x3e,
+                     0xe0, 0xc1, 0x09, 0x04, 0x09, 0x40, 0xe0, 0xc2, 0x09,
+                     0x04, 0x18, 0x8a, 0xe0, 0x31, 0xd9, 0x66, 0x34, 0x3b};
+
+    // Fixtures
+    ddci_device_t d;
+    d.id = 0;
+    d.enabled = 1;
+    memset(ddci_devices, 0, sizeof(ddci_devices));
+    ddci_devices[0] = &d;
+    SFilter f;
+    f.flags = FILTER_CRC;
+    f.id = 0;
+    f.adapter = 0;
+    f.pid = 1234;
+    f.next_filter = -1;
+    f.enabled = 1;
+    filters[0] = &f;
+
+    // Process the CAT
+    ddci_process_cat(0, cat, sizeof(cat) / sizeof(uint8_t), &d);
+
+    // Check that each PID was mapped to the adapter
+    ddci_mapping_table_t *m;
+    m = get_pid_mapping_allddci(0, 48);
+    ASSERT(m != NULL, "EMM PID 48 not mapped");
+    m = get_pid_mapping_allddci(0, 193);
+    ASSERT(m != NULL, "EMM PID 48 not mapped");
+    m = get_pid_mapping_allddci(0, 194);
+    ASSERT(m != NULL, "EMM PID 48 not mapped");
+    m = get_pid_mapping_allddci(0, 49);
+    ASSERT(m != NULL, "EMM PID 48 not mapped");
+
+    // Reset fixtures
+    filters[0] = NULL;
+
+    return 0;
+}
+
 int main() {
     opts.log = 65535 ^ LOG_LOCK ^ LOG_UTILS;
     opts.debug = 0;
     opts.cache_dir = "/tmp";
     strcpy(thread_info[thread_index].thread_name, "test_ddci");
+    TEST_FUNC(test_process_cat(), "testing CAT processing");
     TEST_FUNC(test_channels(), "testing test_channels");
     TEST_FUNC(test_add_del_pmt(), "testing adding and removing pmts");
     TEST_FUNC(test_copy_ts_from_ddci(), "testing test_copy_ts_from_ddci");

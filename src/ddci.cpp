@@ -51,7 +51,7 @@
 #include "utils/ticks.h"
 #include <linux/dvb/ca.h>
 
-#define DEFAULT_LOG LOG_DVBCA
+#define DEFAULT_LOG LOG_DDCI
 #define CONFIG_FILE_NAME "ddci.conf"
 
 extern int dvbca_id;
@@ -316,7 +316,7 @@ int find_ddci_for_pmt(Sddci_channel *c, SPMT *pmt) {
 
 int is_pmt_running(SPMT *pmt) {
     ddci_mapping_table_t *m =
-        get_pid_mapping_allddci(pmt->adapter, pmt->stream_pid[0]->pid);
+        get_pid_mapping_allddci(pmt->adapter, pmt->stream_pids[0].pid);
     if (!m)
         return -1;
     return m->ddci;
@@ -332,9 +332,7 @@ int ddci_process_pmt(adapter *ad, SPMT *pmt) {
 
     if ((d = get_ddci(ad->id))) {
         LOG("Skip processing pmt for ddci adapter %d", ad->id);
-        // grace time for card decrypting lower than the default grace_time
-        pmt->grace_time = 20000;
-        pmt->start_time = getTick();
+
         SPMT *dpmt;
 
         // set the name of the PMT from the DDCI to the original pmt
@@ -419,20 +417,19 @@ int ddci_process_pmt(adapter *ad, SPMT *pmt) {
         d->tid = ad->transponder_id;
     }
 
-    // if the CAT is not mapped, add it
-    if (!has_pid_mapping(d, pmt->adapter, 1)) {
-        LOG("Mapping CAT to PMT %d from transponder %d, DDCI transponder %d",
-            pmt->id, ad->transponder_id, d->tid)
-        add_pid_mapping_table(ad->id, 1, pmt->id, d, 1);
-        d->cat_processed = 0;
-    }
+    // Map mandatory PIDs. Some CAMs need access to the TDT in order to "wake
+    // up", so always map it just in case.
+    for (const uint16_t pid : {0, 1, 20}) {
+        if (!has_pid_mapping(d, pmt->adapter, pid)) {
+            LOG("Mapping mandatory PID %d to PMT %d on DDCI %d", pid, pmt->id,
+                d->id);
+            add_pid_mapping_table(ad->id, pid, pmt->id, d, 1);
 
-    // Some CAMs need access to the TDT in order to "wake up", so always map it
-    // just in case
-    if (!has_pid_mapping(d, pmt->adapter, 20)) {
-        LOG("Mapping TDT to PMT %d from transponder %d, DDCI transponder %d",
-            pmt->id, ad->transponder_id, d->tid);
-        add_pid_mapping_table(ad->id, 20, pmt->id, d, 1);
+            // We need to process the CAT if this is the first time we see it
+            if (pid == 1) {
+                d->cat_processed = 0;
+            }
+        }
     }
 
     LOG("found DDCI %d for pmt %d, running channels %d, max_channels %d", ddid,
@@ -447,14 +444,14 @@ int ddci_process_pmt(adapter *ad, SPMT *pmt) {
         add_pid_mapping_table(ad->id, pmt->ca[i]->pid, pmt->id, d, 1);
     }
 
-    for (i = 0; i < pmt->stream_pids; i++) {
-        LOGM("DD %d adding stream pid %d %s", d->id, pmt->stream_pid[i]->pid,
-             pmt->stream_pid[i]->pid == pmt->pcr_pid ? "PCR" : "");
+    for (const auto &stream_pid : pmt->stream_pids) {
+        LOGM("DD %d adding stream pid %d %s", d->id, stream_pid.pid,
+             stream_pid.pid == pmt->pcr_pid ? "PCR" : "");
 
-        int ddci_pid = add_pid_mapping_table(ad->id, pmt->stream_pid[i]->pid,
-                                             pmt->id, d, 0);
+        int ddci_pid =
+            add_pid_mapping_table(ad->id, stream_pid.pid, pmt->id, d, 0);
         // map the PCR pid as well
-        if (pmt->stream_pid[i]->pid == pmt->pcr_pid) {
+        if (stream_pid.pid == pmt->pcr_pid) {
             d->pmt[pos].pcr_pid = ddci_pid;
         }
     }
@@ -738,38 +735,43 @@ int ddci_create_pmt(ddci_device_t *d, SPMT *pmt, uint8_t *new_pmt, int pmt_size,
 
     // Add Stream pids
     // Add CA IDs and CA Pids
-    for (i = 0; i < pmt->stream_pids; i++) {
+    for (const auto &stream_pid : pmt->stream_pids) {
         if (get_ca_multiple_pmt(d->id)) {
             // Do not map any pids that are not requested by the client
-            SPid *p = find_pid(pmt->adapter, pmt->stream_pid[i]->pid);
+            SPid *p = find_pid(pmt->adapter, stream_pid.pid);
             if (!p) {
                 p = find_pid(pmt->adapter, 8192); // all pids are requested
             }
-            int is_added = 0, j;
-            if (p) {
-                for (j = 0; j < MAX_STREAMS_PER_PID; j++)
-                    if (p->sid[j] >= 0 && p->sid[j] < MAX_STREAMS) {
-                        is_added = 1;
-                        break;
-                    }
-            }
-            if (is_added == 0) {
+            if (!p || p->sid.empty()) {
                 LOGM("%s: adapter %d pid %d not requested by the client",
-                     __FUNCTION__, pmt->adapter, pmt->stream_pid[i]->pid);
+                     __FUNCTION__, pmt->adapter, stream_pid.pid);
                 continue;
             }
         }
 
-        *b = pmt->stream_pid[i]->type;
-        copy16(b, 1,
-               safe_get_pid_mapping(d, pmt->adapter, pmt->stream_pid[i]->pid));
-        int desc_len = pmt->stream_pid[i]->desc_len;
-        copy16(b, 3, desc_len);
-        memcpy(b + 5, pmt->stream_pid[i]->desc, desc_len);
-        b += desc_len + 5;
+        // Stream type + PID
+        *b = stream_pid.type;
+        copy16(b, 1, safe_get_pid_mapping(d, pmt->adapter, stream_pid.pid));
+        b += 3;
 
-        LOGM("%s: pmt %d added pid %04X, type %02X", __FUNCTION__, pmt->id,
-             pmt->stream_pid[i]->pid, pmt->stream_pid[i]->type);
+        // ES info length
+        int es_info_len = 0;
+        for (const auto &d : stream_pid.descriptors) {
+            es_info_len += d.len + 2;
+        }
+        copy16(b, 0, es_info_len);
+        b += 2;
+
+        // Descriptors
+        for (const auto &d : stream_pid.descriptors) {
+            *b++ = d.type;
+            *b++ = d.len;
+            memcpy(b, d.data.data(), d.len);
+            b += d.len;
+        }
+
+        LOGM("%s: pmt %d added pid %04X, type %02X, es_len %d", __FUNCTION__,
+             pmt->id, stream_pid.pid, stream_pid.type, es_info_len);
     }
     // set the length (b + 4 bytes from crc)
     copy16(start_pmt, -2, 4 + b - start_pmt);
@@ -867,10 +869,11 @@ int push_ts_to_adapter(ddci_device_t *d, adapter *ad, uint16_t *mapping) {
             d->fifo.write_index - d->read_index[ad->id], d->read_index[ad->id]);
         dump_packets("DDCI -> AD", ad->buf + i, DVB_FRAME, i);
     }
-    LOGM("popped %d bytes from fifo up to index %d, rlen %d, lbuf %d, left in "
-         "fifo %jd",
-         popped, i, ad->rlen, ad->lbuf,
-         d->fifo.write_index - d->read_index[ad->id]);
+    DEBUGM(
+        "popped %d bytes from fifo up to index %d, rlen %d, lbuf %d, left in "
+        "fifo %jd",
+        popped, i, ad->rlen, ad->lbuf,
+        d->fifo.write_index - d->read_index[ad->id]);
     return 0;
 }
 
@@ -950,8 +953,8 @@ int ddci_process_ts(adapter *ad, ddci_device_t *d) {
             iop++;
         }
 
-        LOGM("writing %d bytes to DDCI device %d, fd %d, sock %d", bytes, d->id,
-             ad2->fe, ad2->fe_sock);
+        DEBUGM("writing %d bytes to DDCI device %d, fd %d, sock %d", bytes,
+               d->id, ad2->fe, ad2->fe_sock);
         int rb = writev(ad2->fe, io, iop);
         if (rb != bytes)
             LOG("%s: write incomplete to DDCI %d,fd %d, wrote %d out of %d "
@@ -1031,8 +1034,8 @@ int ddci_read_sec_data(sockets *s) {
 
     if ((left = fifo_push_force(&d->fifo, b, rlen, 1)) == 0)
         LOG("dropping %d bytes for ddci_adapter %d", left, d->id);
-    LOGM("pushed %d bytes to the adapter buffer from %d [write_index %jd]",
-         left, rlen, d->fifo.write_index);
+    DEBUGM("pushed %d bytes to the adapter buffer from %d [write_index %jd]",
+           left, rlen, d->fifo.write_index);
     dump_packets("DDCI ->FIFO ", (uint8_t *)d->fifo.data, 188, 0);
     dump_packets("SOURCE ", b, 188, 0);
     return 0;
@@ -1145,69 +1148,72 @@ fe_delivery_system_t ddci_delsys(int aid, int fd, fe_delivery_system_t *sys) {
     return (fe_delivery_system_t)0;
 }
 
+std::string ddci_name(int aid, int fd) { return ""; }
+
 int ddci_process_cat(int filter, unsigned char *b, int len, void *opaque) {
-    int cat_len = 0, i, es_len = 0, caid, add_cat = 1;
+    int cat_len = 0, cat_ver = 0, i, k, es_len = 0, add_cat = 1;
+    uint16_t caid, capid;
+    std::vector<uint16_t> emm_pids;
     ddci_device_t *d = (ddci_device_t *)opaque;
-    cat_len = len - 4; // remove crc
     SFilter *f = get_filter(filter);
-    int id;
     if (!f)
         return 0;
 
     if (b[0] != 1)
         return 0;
 
-    if (!d->enabled)
-        LOG_AND_RETURN(0, "DDCI %d no longer enabled, not processing PAT",
-                       d->id);
-
     std::unique_lock<SMutex> lock(d->mutex);
+
+    if (!d->enabled)
+        LOG_AND_RETURN(0, "DDCI %d no longer enabled, not processing CAT",
+                       d->id);
 
     if (d->cat_processed || d->disable_cat) {
         return 0;
     }
 
-    cat_len -= 9;
+    cat_len = (b[1] & 0x0F) << 8 | b[2];
+    cat_ver = (b[5] & 0x3E) >> 1;
+
     b += 8;
-    LOG("CAT DDCI %d len %d", d->id, cat_len);
+    LOG("CAT DDCI %d ver %d, len %d", d->id, cat_ver, cat_len);
     if (cat_len > 1500) {
         return 0;
     }
 
-    id = 0;
-    for (i = 0; i < cat_len; i += es_len) // reading program info
-    {
+    // Parse all EMM PIDs from the table
+    for (i = 0, k = 0; i < cat_len - 4; i += es_len, k++) {
         es_len = b[i + 1] + 2;
         if (b[i] != 9)
             continue;
-        caid = b[i + 2] * 256 + b[i + 3];
-        if (id < MAX_CA_PIDS) {
-            d->capid[id] = (b[i + 4] & 0x1F) * 256 + b[i + 5];
-            LOG("CAT pos %d caid %04X, pid %d", id, caid, d->capid[id]);
-        } else {
-            LOG("MAX_CA_PIDS (%d) reached for adapter %d", MAX_CA_PIDS, d->id);
-        }
 
-        id++;
+        caid = b[i + 2] * 256 + b[i + 3];
+        capid = (b[i + 4] & 0x1F) * 256 + b[i + 5];
+        LOG("CAT pos %d caid %04X, pid %d", k, caid, capid);
+
+        emm_pids.push_back(capid);
     }
 
     add_cat = 1;
 
-    for (i = 0; i < id; i++)
-        if (get_ddci_pid(d, d->capid[i])) {
+    for (const auto &emm_pid : emm_pids) {
+        if (get_ddci_pid(d, emm_pid)) {
             add_cat = 0;
-            LOG("CAT pid %d already in use, skipping CAT", d->capid[i]);
+            LOG("CAT pid %d already in use, skipping CAT", emm_pid);
             d->cat_processed = 1;
             break;
         }
+    }
+
     if (!add_cat) {
         return 0;
     }
 
     // sending EMM pids to the CAM
-    for (i = 0; i < id; i++) {
-        add_pid_mapping_table(f->adapter, d->capid[i], d->pmt[0].id, d, 1);
+    for (const auto &emm_pid : emm_pids) {
+        add_pid_mapping_table(f->adapter, emm_pid, d->pmt[0].id, d, 1);
     }
+
     d->cat_processed = 1;
     lock.unlock();
     update_pids(f->adapter);
@@ -1378,6 +1384,7 @@ void find_ddci_adapter(adapter **a) {
                 ad->commit = NULL;
                 ad->tune = NULL;
                 ad->delsys = ddci_delsys;
+                ad->name = ddci_name;
                 ad->post_init = ddci_post_init;
                 ad->close = ddci_close_adapter;
                 ad->get_signal = NULL;

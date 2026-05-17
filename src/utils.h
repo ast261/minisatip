@@ -1,8 +1,12 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include "config.h"
 #include "utils/logging/logging.h"
+#include <iostream>
 #include <mutex>
+#include <sstream>
+#include <string>
 
 #include <pthread.h>
 #include <stdint.h>
@@ -10,8 +14,6 @@
 #include <sys/uio.h>
 
 typedef std::recursive_mutex SMutex;
-#define mutex_lock(x) (x)->lock()
-#define mutex_unlock(x) (x)->unlock()
 
 int split(char **rv, char *s, int lrv, char sep);
 int map_int(char *s, char **v);
@@ -51,6 +53,19 @@ int is_rtsp_response(char *buf, int len);
 int is_rtsp_request(char *buf, int len);
 int is_http_request(char *buf, int len);
 int is_byte_array_empty(uint8_t *b, int len);
+uint32_t get_random_uint32();
+template <typename Container>
+std::string iterable_to_string(const Container &container,
+                               const std::string &delimiter = ", ") {
+    std::stringstream ss;
+    for (auto it = container.begin(); it != container.end(); ++it) {
+        ss << *it;
+        if (std::next(it) != container.end()) {
+            ss << delimiter;
+        }
+    }
+    return ss.str();
+}
 
 #define dump_packets(message, b, len, packet_offset)                           \
     if (DEFAULT_LOG & opts.debug)                                              \
@@ -88,8 +103,8 @@ typedef ssize_t (*mywritev)(int fd, const struct iovec *io, int len);
 const char *loglevels[] = {"general", "http",   "socketworks", "stream",
                            "adapter", "satipc", "pmt",         "tables",
                            "dvbapi",  "lock",   "netceiver",   "ca",
-                           "axe",     "socket", "utils",       "dmx",
-                           "ssdp",    "dvb",    NULL};
+                           "socket",  "utils",  "dmx",         "ssdp",
+                           "dvb",     "ddci",   NULL};
 mywritev _writev = writev;
 #else
 extern char *loglevels[];

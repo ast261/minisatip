@@ -3,6 +3,8 @@
 #include "dvb.h"
 #include "minisatip.h"
 
+#include <string>
+#include <unordered_set>
 typedef struct ca_device ca_device_t;
 
 #define MAX_ADAPTERS 100
@@ -32,12 +34,39 @@ typedef struct ca_device ca_device_t;
 #define MAX_DELSYS 10
 #define MAX_PMT_FOR_ADAPTER 255
 
+#define MAX_PIDS 128
+#define PID_STREAM_ID_UNDEFINED -1
+#define PID_STATE_INACTIVE 0
+#define PID_STATE_ACTIVE 1
+#define PID_STATE_NEW 2
+#define PID_STATE_DELETED 3
+
+typedef struct struct_pid {
+    int16_t pid; // pid for this demux - not used
+    int16_t pmt, filter;
+    char flags;                 // PID_STATE...
+    int fd;                     // fd for this demux
+    int cc_err, cc_err2;        // counter errors
+    uint32_t packets, packets2; // how many packets for this pid arrived, used
+                                // to sort the pids
+    int dec_err;                // decrypt errors, continuity counters
+    uint8_t is_decrypted;       // Set when first decrypted
+    int16_t cc, cc1, cc2;
+    int sock; // sock_id
+#ifdef CRC_TS
+    uint32_t crc;
+    int count;
+#endif
+    std::unordered_set<int16_t> sid;
+    bool has_stream(int id) { return sid.count(id) > 0; }
+} SPid;
+
 typedef struct struct_adapter adapter;
 struct struct_adapter {
     char enabled;
     SMutex mutex;
     char type; // available on the system
-    int fe, dmx, dvr;
+    int fe = -1, dmx, dvr = -1;
     int pa, fn;
     // flags
 
@@ -45,6 +74,7 @@ struct struct_adapter {
     char err; // adapter in an error state (initialized but not working
               // correctly)
     int adapter_timeout;
+    std::string adapter_name;
     char flush, updating_pids;
     int pids_updates;
     // physical adapter, physical frontend number
@@ -59,7 +89,6 @@ struct struct_adapter {
     int force_close;
     unsigned char *buf; // 7 rtp packets = MAX_PACK, 7 frames / packet
     int64_t rtime;
-    int64_t last_sort;
     int new_gs;
     int status, status_cnt, fast_status;
     int dmx_source;
@@ -93,7 +122,7 @@ struct struct_adapter {
     int is_t2mi;
     uint64_t tune_time;
     pthread_t thread;
-    char name[5];
+    char thread_name[5];
     char null_packets;
     char drop_encrypted;
     char failed_adapter; // failed adapters will not be closed due to timeout
@@ -103,13 +132,6 @@ struct struct_adapter {
     // keeps the PMTs that are present in the PAT
     int active_pmt[MAX_PMT_FOR_ADAPTER];
     int active_pmts;
-#endif
-#ifdef AXE
-    int fe2;
-    int64_t axe_vdevice_last_sync;
-    int64_t axe_pktc;
-    int64_t axe_ccerr;
-    int axe_used;
 #endif
 
     int (*set_pid)(adapter *ad, int i_pid);
@@ -126,6 +148,7 @@ struct struct_adapter {
     // called when new tuning arguments are set
     int (*tune)(int aid, transponder *tp);
     fe_delivery_system_t (*delsys)(int aid, int fd, fe_delivery_system_t *sys);
+    std::string (*name)(int aid, int fd);
     // called when the adapter is closed
     int (*close)(adapter *ad);
     void (*free)(adapter *ad);
@@ -154,7 +177,7 @@ int tune(int aid, int sid);
 void post_tune(adapter *ad);
 SPid *find_pid(int aid, int p);
 adapter *get_adapter1(int aid, const char *file, int line);
-adapter *get_configured_adapter1(int aid, char *file, int line);
+inline adapter *get_configured_adapter_nw(int aid);
 char *describe_adapter(int sid, int aid, char *dad, int ld);
 void dump_pids(int aid);
 void sort_pids(int aid);
@@ -190,7 +213,6 @@ int get_absolute_source_for_adapter(int aid, int src, int sys);
 void set_absolute_src(char *o);
 void adapter_commit(adapter *ad);
 #define get_adapter(a) get_adapter1(a, __FILE__, __LINE__)
-#define get_configured_adapter(a) get_configured_adapter1(a, __FILE__, __LINE__)
 #define get_adapter_nw(aid)                                                    \
     ((aid >= 0 && aid < MAX_ADAPTERS && a[aid] && a[aid]->enabled) ? a[aid]    \
                                                                    : NULL)

@@ -258,7 +258,7 @@ static inline int extra_quattro(int input, int diseqc, int *equattro) {
 
 adapter *axe_use_adapter(int input) {
     int input2 = input < 4 ? input : -1;
-    adapter *ad = get_configured_adapter(input2);
+    adapter *ad = get_configured_adapter_nw(input2);
     char buf[32];
     if (ad) {
         if (ad->fe2 <= 0) {
@@ -322,7 +322,7 @@ int axe_setup_switch(adapter *ad) {
                     if (pos <= 0)
                         continue;
                     pos--;
-                    ad2 = get_configured_adapter(aid);
+                    ad2 = get_configured_adapter_nw(aid);
                     if (!ad2)
                         continue;
                     if (ad2->fe2 <= 0)
@@ -341,7 +341,7 @@ int axe_setup_switch(adapter *ad) {
                         if (pos <= 0)
                             continue;
                         pos--;
-                        ad2 = get_configured_adapter(aid);
+                        ad2 = get_configured_adapter_nw(aid);
                         if (!ad2)
                             continue;
                         LOGM("axe: checking %d used 0x%x in %d", ad->id,
@@ -374,7 +374,7 @@ int axe_setup_switch(adapter *ad) {
                 }
                 if (adm->old_pol >= 0) {
                     for (aid = 0; aid < 4; aid++) {
-                        ad2 = get_configured_adapter(aid);
+                        ad2 = get_configured_adapter_nw(aid);
                         if (!ad2 || ad2->fe2 <= 0 || ad == ad2)
                             continue;
                         if ((ad2->master_source >= 0) &&
@@ -486,7 +486,7 @@ int axe_setup_switch(adapter *ad) {
 
 axe:
     for (aid = 0; aid < 4; aid++) {
-        ad2 = get_configured_adapter(aid);
+        ad2 = get_configured_adapter_nw(aid);
         if (ad2)
             LOGM("axe_fe: used[%d] = 0x%x, pol=%d, hiband=%d, diseqc=%d", aid,
                  ad2->axe_used, ad2->old_pol, ad2->old_hiband, ad2->old_diseqc);
@@ -841,7 +841,7 @@ int free_axe_input(adapter *ad) {
     adapter *ad2;
 
     for (aid = 0; aid < 4; aid++) {
-        ad2 = get_configured_adapter(aid);
+        ad2 = get_configured_adapter_nw(aid);
         if (ad2) {
             ad2->axe_used &= ~(1 << ad->id);
             LOGM("axe: _free input %d : %04x", ad2->id, ad2->axe_used);
@@ -917,7 +917,7 @@ char *get_axe_coax(int aid, char *dest, int max_size) {
         return dest;
 
     for (i = 0; i < 4; i++) {
-        ad = get_configured_adapter(i);
+        ad = get_configured_adapter_nw(i);
         if (ad && ad->axe_used & (1 << aid))
             len += snprintf(dest + len, max_size - len, "LNB%d,", i + 1);
     }

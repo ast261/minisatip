@@ -1512,7 +1512,8 @@ int dvb_psi_read(int socket, void *buf, int len, sockets *ss, int *rb) {
     int i, pid = -1;
     // obtain the pid
     for (i = 0; i < MAX_PIDS; i++)
-        if ((ad->pids[i].flags == 1) && (ad->pids[i].fd == socket)) {
+        if ((ad->pids[i].flags == PID_STATE_ACTIVE) &&
+            (ad->pids[i].fd == socket)) {
             pid = ad->pids[i].pid;
             break;
         }
@@ -1708,6 +1709,19 @@ fe_delivery_system_t dvb_delsys(int aid, int fd, fe_delivery_system_t *sys) {
             get_delsys(sys[i]), sys[i]);
 
     return (fe_delivery_system_t)rv;
+}
+
+std::string dvb_name(int aid, int fd) {
+    // Query for frontend information so we can get the name
+    struct dvb_frontend_info fe_info;
+
+    if (ioctl(fd, FE_GET_INFO, &fe_info) < 0) {
+        LOG("FE_GET_INFO failed for adapter %d, fd %d: %s ", aid, fd,
+            strerror(errno));
+        return "";
+    }
+
+    return std::string(fe_info.name);
 }
 
 int64_t get_strength_decibels(int64_t init_strength) {
@@ -2051,6 +2065,7 @@ void find_dvb_adapter(adapter **a) {
                 ad->commit = dvb_commit;
                 ad->tune = dvb_tune;
                 ad->delsys = dvb_delsys;
+                ad->name = dvb_name;
                 ad->post_init = NULL;
                 ad->close = dvb_close;
                 ad->get_signal = dvb_get_signal;

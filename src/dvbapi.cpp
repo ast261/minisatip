@@ -331,9 +331,6 @@ int dvbapi_reply(sockets *s) {
         case DVBAPI_ECM_INFO: {
             int pos1 = s->rlen - pos;
             SKey *k = get_key(b[4] - opts.dvbapi_offset);
-            if (!k) {
-                break;
-            }
             unsigned char cardsystem[255];
             unsigned char reader[255];
             unsigned char from[255];
@@ -345,15 +342,16 @@ int dvbapi_reply(sockets *s) {
 
             copy16r(sid, b, i);
 
-            msg[0] = k->cardsystem;
-            msg[1] = k->reader;
-            msg[2] = k->from;
-            msg[3] = k->protocol;
-            copy16r(k->caid, b, i + 2);
-            copy16r(k->info_pid, b, i + 4);
-            copy32r(k->prid, b, i + 6);
-            copy32r(k->ecmtime, b, i + 10);
-
+            if (k) {
+                msg[0] = k->cardsystem;
+                msg[1] = k->reader;
+                msg[2] = k->from;
+                msg[3] = k->protocol;
+                copy16r(k->caid, b, i + 2);
+                copy16r(k->info_pid, b, i + 4);
+                copy32r(k->prid, b, i + 6);
+                copy32r(k->ecmtime, b, i + 10);
+            }
             i += 14;
             while (msg[j] && i < pos1) {
                 len = b[i++];
@@ -365,7 +363,7 @@ int dvbapi_reply(sockets *s) {
                 i += len;
                 j++;
             }
-            if (i < pos1)
+            if (i < pos1 && k)
                 k->hops = b[i++];
             pos += i;
             LOG("dvbapi: ECM_INFO: key %d, SID = %04X, CAID = %04X (%s), PID = "
@@ -373,8 +371,9 @@ int dvbapi_reply(sockets *s) {
                 "(%04X), ProvID = %06X, ECM time = %d ms, reader = %s, from = "
                 "%s, "
                 "protocol = %s, hops = %d",
-                k->id, sid, k->caid, msg[0], k->info_pid, k->info_pid, k->prid,
-                k->ecmtime, msg[1], msg[2], msg[3], k->hops);
+                k ? k->id : -1, sid, k ? k->caid : 0, msg[0],
+                k ? k->info_pid : 0, k ? k->info_pid : 0, k ? k->prid : 0,
+                k ? k->ecmtime : -1, msg[1], msg[2], msg[3], k ? k->hops : 0);
             break;
         }
 
@@ -385,7 +384,8 @@ int dvbapi_reply(sockets *s) {
             k_id = b[4] - opts.dvbapi_offset;
             dvbapi_copy32r(algo, b, 9);
             dvbapi_copy32r(mode, b, 13);
-            LOG("dvbapi: received DVBAPI_CA_SET_MODE, key %d, algo %d, mode %d",
+            LOG("dvbapi: received DVBAPI_CA_SET_DESCR_MODE, key %d, algo %d, "
+                "mode %d",
                 k_id, algo, mode);
             k = get_key(k_id);
             if (!k)
@@ -461,11 +461,11 @@ int dvbapi_send_pmt(SKey *k, int cmd_id) {
 
     // Pids associated with the PMT
     copy16(buf, 10, len - 12);
-    int i;
-    for (i = 0; i < pmt->stream_pids; i++) {
+
+    for (const auto &stream_pid : pmt->stream_pids) {
         len += 5;
-        int type = pmt->stream_pid[i]->type;
-        int pid = pmt->stream_pid[i]->pid;
+        int type = stream_pid.type;
+        int pid = stream_pid.pid;
         buf[len - 5] = type;
         copy16(buf, len - 4, pid);
         copy16(buf, len - 2, 0);
@@ -678,12 +678,23 @@ int send_ecm(int filter_id, unsigned char *b, int len, void *opaque) {
     return 0;
 }
 
-int set_algo(SKey *k, int algo, int mode) {
-    if (algo == CA_ALGO_AES128 && mode == CA_MODE_CBC)
-        algo = CA_ALGO_AES128_CBC;
-    k->algo = algo;
-
-    return 0;
+void set_algo(SKey *k, int algo, int mode) {
+    switch (algo) {
+    case CW_ALGO_CSA:
+    case CW_ALGO_CSA_ALT: {
+        k->algo = CA_ALGO_DVBCSA;
+        break;
+    }
+    case CW_ALGO_DES: {
+        k->algo = CA_ALGO_DES;
+        break;
+    }
+    case CW_ALGO_AES128: {
+        k->algo =
+            mode == CW_ALGO_MODE_ECB ? CA_ALGO_AES128_ECB : CA_ALGO_AES128_CBC;
+        break;
+    }
+    }
 }
 
 int keys_add(int i, int adapter, int pmt_id) {

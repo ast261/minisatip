@@ -3,18 +3,14 @@
 #include "adapter.h"
 #include "dvb.h"
 #include <unordered_map>
+#include <vector>
 
 #define MAX_CAID 20
 #define MAX_ACTIVE_PIDS 20
-#define MAX_PMT_PIDS (2 * MAX_ACTIVE_PIDS)
 #define CA_ALGO_DVBCSA 0
 #define CA_ALGO_DES 1
-#define CA_ALGO_AES128 2
 #define CA_ALGO_AES128_ECB 2
 #define CA_ALGO_AES128_CBC 3
-
-#define CA_MODE_ECB 0
-#define CA_MODE_CBC 1
 
 #define MAX_PMT 25600
 #define MAX_CW 200
@@ -39,8 +35,6 @@
 #define PMT_RUNNING 2
 #define PMT_STOPPING 3
 #define PMT_CACHED 4
-
-#define PMT_GRACE_TIME 2000
 
 #define CLM_MORE 0x00
 #define CLM_FIRST 0x01
@@ -97,13 +91,33 @@ typedef struct struct_cw {
     void *opaque;
 } SCW;
 
+typedef struct descriptor {
+    uint8_t type;
+    uint8_t len;
+    std::vector<uint8_t> data;
+
+    bool operator==(const struct descriptor &other) const {
+        return this->type == other.type && this->len == other.len &&
+               this->data == other.data;
+    };
+
+    bool is_ca_descriptor() const { return this->type == 0x09; }
+
+    uint16_t get_ca_descriptor_caid() const {
+        return (data[0] * 256) + data[1];
+    }
+
+    uint16_t get_ca_descriptor_capid() const {
+        return (data[2] & 0x1F) * 256 + data[3];
+    }
+} descriptor_t;
+
 typedef struct struct_stream_pid {
     int type;
     int pid;
-    char is_audio : 1;
-    char is_video : 1;
-    int desc_len;
-    uint8_t desc[];
+    bool is_audio;
+    bool is_video;
+    std::vector<descriptor_t> descriptors;
 } SStreamPid;
 
 typedef struct struct_pmt_ca {
@@ -122,8 +136,8 @@ typedef struct struct_pmt {
     int version;
     uint16_t caids;
     SPMTCA *ca[MAX_CAID];
-    int stream_pids;
-    SStreamPid *stream_pid[MAX_PMT_PIDS];
+    std::vector<descriptor_t> descriptors;
+    std::vector<SStreamPid> stream_pids;
     int id;
     int blen;
     int ca_mask, disabled_ca_mask;
@@ -137,10 +151,8 @@ typedef struct struct_pmt {
     void *opaque;
     char state; // PMT state (PMT_STOPPED, PMT_STARTING, PMT_RUNNING,
                 // PMT_STOPPING)
-    char encrypted;
-    int first_active_pid;
-    int64_t grace_time, start_time;
     int filter;
+    int64_t start_time;
     std::unordered_map<uint64_t, int> *global_start, *local_start;
 } SPMT;
 
@@ -226,8 +238,9 @@ int wait_pusi(adapter *ad, int len);
 int pmt_add_ca_descriptor(SPMT *pmt, uint8_t *buf, int sca_id);
 void free_filters();
 void stop_pmt(SPMT *pmt, adapter *ad);
-int pmt_add_stream_pid(SPMT *pmt, int pid, int type, int is_audio, int is_video,
-                       int es_len);
+int pmt_add_stream_pid(SPMT *pmt, int pid, int type, bool is_audio,
+                       bool is_video);
+void emulate_add_all_pids(adapter *ad);
 void pmt_add_caid(SPMT *pmt, uint16_t caid, uint16_t capid, uint8_t *data,
                   int len);
 void free_all_pmts();

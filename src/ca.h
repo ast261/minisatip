@@ -1,10 +1,14 @@
 #ifndef CA_H
 #define CA_H
 #include "adapter.h"
-#include "aes.h"
 #include "pmt.h"
-#define MAX_CA_PMT 4
-#define DEFAULT_CA_PMT 4
+#include <openssl/evp.h>
+#include <openssl/rsa.h>
+// Absolute maximum, used for array sizes. User sets the actual maximum value
+// using "-c"
+#define MAX_CA_PMT 8
+// Default number of CA PMTs to use
+#define DEFAULT_CA_PMT 1
 #define MAX_SESSIONS 64
 #define PMT_INVALID -1
 #define PMT_ID_IS_VALID(x) (x > PMT_INVALID)
@@ -173,7 +177,7 @@ struct cc_ctrl_data {
     struct cert_ctx *cert_ctx;
 
     /* private key of device-cert */
-    RSA *rsa_device_key;
+    EVP_PKEY *rsa_device_key;
 };
 
 struct ca_device {

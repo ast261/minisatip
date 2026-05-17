@@ -17,9 +17,6 @@
  * USA
  *
  */
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
-
 #include "ca.h"
 #include "dvb.h"
 #include "minisatip.h"
@@ -56,6 +53,9 @@ extern adapter *a[MAX_ADAPTERS];
 extern SFilter *filters[MAX_FILTERS];
 extern SPMT *pmts[MAX_PMT];
 
+// Forward declarations
+descriptor_t create_descriptor(const uint8_t *data);
+
 uint8_t packet[188] = {
     0x47, 0x40, 0xff, 0x99, 0x14, 0x4c, 0x83, 0x7f, 0x46, 0xba, 0xb8, 0x12,
     0xfb, 0x83, 0xf7, 0x50, 0x9c, 0x73, 0x55, 0xe1, 0x8a, 0x1a, 0x54, 0x66,
@@ -79,6 +79,45 @@ uint8_t cw_invalid[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77};
 
 extern adapter *a[MAX_ADAPTERS];
 extern SCW *cws[MAX_CW];
+
+int test_descriptor_equality() {
+    const uint8_t descr1_data[] = {0x09, 0x04, 0x0B, 0x00, 0x05, 0x73};
+    descriptor_t descr1 = create_descriptor(descr1_data);
+
+    // other type
+    const uint8_t descr2_data[] = {0x01, 0x04, 0x0B, 0x00, 0x05, 0x73};
+    descriptor_t descr2 = create_descriptor(descr2_data);
+
+    // other length
+    const uint8_t descr3_data[] = {0x09, 0x02, 0x0B, 0x00};
+    descriptor_t descr3 = create_descriptor(descr3_data);
+
+    // other data
+    const uint8_t descr4_data[] = {0x09, 0x04, 0x0B, 0x00, 0x05, 0xAB};
+    descriptor_t descr4 = create_descriptor(descr4_data);
+
+    // identical
+    const uint8_t descr5_data[] = {0x09, 0x04, 0x0B, 0x00, 0x05, 0x73};
+    descriptor_t descr5 = create_descriptor(descr5_data);
+
+    ASSERT(descr1 != descr2, "descr1 and descr2 should not match");
+    ASSERT(descr1 != descr3, "descr1 and descr3 should not match");
+    ASSERT(descr1 != descr4, "descr1 and descr4 should not match");
+    ASSERT(descr1 == descr1, "descr1 should match itself");
+    ASSERT(descr1 == descr5, "descr1 and descr5 should match");
+
+    return 0;
+}
+
+int test_descriptor_caid_capid_getters() {
+    const uint8_t descr1_data[] = {0x09, 0x04, 0x0B, 0x00, 0x05, 0x73};
+    descriptor_t descr1 = create_descriptor(descr1_data);
+
+    ASSERT(descr1.get_ca_descriptor_caid() == 0x0B00, "CAID mismatch");
+    ASSERT(descr1.get_ca_descriptor_capid() == 0x0573, "CA PID mismatch");
+
+    return 0;
+}
 
 int test_decrypt() {
     int i, max_len = 1000;
@@ -114,6 +153,8 @@ int test_decrypt() {
     free(a[0]->buf);
     delete a[0];
     a[0] = NULL;
+    delete pmts[0];
+    pmts[0] = NULL;
     return 0;
 }
 
@@ -198,6 +239,7 @@ int test_assemble_packet() {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
     SFilter f;
     f.id = 0;
+    f.flags = 0;
     int data = assemble_packet(&f, packet);
     ASSERT_EQUAL(123, data, "asemble_packet failed without adaptation")
     ASSERT_EQUAL(
@@ -257,10 +299,50 @@ int test_assemble_multi_packet() {
     return 0;
 }
 
+int test_emulate_add_all_pids() {
+    adapter ad;
+    a[0] = &ad;
+    ad.enabled = 1;
+    SPMT pmt;
+    pmts[0] = &pmt;
+    pmt.enabled = 1;
+    pmt.adapter = 0;
+    opts.emulate_pids_all = 1;
+    SStreamPid sp{.type = 1, .pid = 100};
+    pmt.stream_pids.push_back(sp);
+    SStreamPid sp1{.type = 1, .pid = 101};
+    pmt.stream_pids.push_back(sp1);
+    ad.active_pmts = 1;
+    ad.active_pmt[0] = 0;
+    mark_pid_add(0, ad.id, 8192);
+    mark_pid_add(1, ad.id, 8192);
+    mark_pid_add(2, ad.id, 101);
+    update_pids(ad.id);
+    int pids[] = {100, 0, 1, 16};
+    for (auto pid : pids) {
+        SPid *p = find_pid(ad.id, pid);
+        ASSERT_EQUAL(p->pid, pid, "emulate_add_all_pids failed");
+        ASSERT_EQUAL(p->sid.count(0), 1,
+                     "emulate_add_all_pids failed to set first stream");
+        ASSERT_EQUAL(p->sid.count(1), 1,
+                     "emulate_add_all_pids failed to set second stream");
+    }
+    SPid *p = find_pid(ad.id, 101); // pid 101 should have sid 0, 1. 2
+
+    ASSERT(p->has_stream(2) && p->has_stream(0) && p->has_stream(1),
+           "Expected 3 sids to be set fo pid 101");
+    opts.emulate_pids_all = 0;
+    return 0;
+}
+
 int main() {
     opts.log = 255;
     opts.debug = 255;
     strcpy(thread_info[thread_index].thread_name, "test_pmt");
+    TEST_FUNC(test_descriptor_equality(),
+              "testing descriptor equality operator");
+    TEST_FUNC(test_descriptor_caid_capid_getters(),
+              "testing descriptor getters");
     TEST_FUNC(test_wait_pusi(), "testing decrypt");
     TEST_FUNC(test_decrypt(), "testing decrypt");
     TEST_FUNC(test_assemble_packet(),
@@ -269,6 +351,8 @@ int main() {
               "testing assemble_packet with adaptation");
     TEST_FUNC(test_assemble_multi_packet(),
               "testing assemble_packet with multiple packets");
+    TEST_FUNC(test_emulate_add_all_pids(),
+              "testing test_emulate_add_all_pids failed")
     fflush(stdout);
     return 0;
 }

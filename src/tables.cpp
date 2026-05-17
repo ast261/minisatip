@@ -216,16 +216,6 @@ int close_pmt_for_cas(adapter *ad, SPMT *pmt) {
     return 0;
 }
 
-void disable_pmt_for_ca(int i, SPMT *pmt) {
-    uint64_t mask = 1ULL << i;
-    if (i >= MAX_CA || i < 0)
-        return;
-    if (ca[i].enabled) {
-        close_pmt_for_ca(i, NULL, pmt);
-        pmt->disabled_ca_mask |= mask;
-    }
-}
-
 int send_pmt_to_ca(int i, adapter *ad, SPMT *pmt) {
     uint64_t mask;
     int rv = 0, result = 0;
@@ -274,26 +264,6 @@ int send_pmt_to_cas(adapter *ad, SPMT *pmt) {
     }
 
     return rv;
-}
-
-void tables_update_encrypted_status(adapter *ad, SPMT *pmt) {
-    int i;
-    int status = pmt->encrypted;
-    if (!ad)
-        return;
-    LOGM("Updating status %d for pmt %d, ad mask %08X, pmt mask %08X", status,
-         pmt->id, ad->ca_mask, pmt->ca_mask);
-    for (i = 0; i < nca; i++)
-        if (ca[i].enabled && (ad->ca_mask & (1ULL << i)) &&
-            (pmt->ca_mask & (1ULL << i))) {
-            LOGM("Updating status %d pmt %d for ca %d and adapter %d", status,
-                 pmt->id, i, ad->id);
-            if (status == TABLES_CHANNEL_ENCRYPTED && ca[i].op->ca_encrypted)
-                ca[i].op->ca_encrypted(ad, pmt);
-            else if (status == TABLES_CHANNEL_DECRYPTED &&
-                     ca[i].op->ca_decrypted)
-                ca[i].op->ca_decrypted(ad, pmt);
-        }
 }
 
 void tables_add_pid(adapter *ad, SPMT *pmt, int pid) {

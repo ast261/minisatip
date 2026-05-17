@@ -17,7 +17,6 @@
  * USA
  *
  */
-#define _FILE_OFFSET_BITS 64
 #define UTILS_C
 
 #include "utils.h"
@@ -53,7 +52,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#ifndef DISABLE_STACKTRACE
+#ifndef DISABLE_CXX23
 #include <iostream>
 #include <stacktrace>
 #endif
@@ -153,8 +152,9 @@ char *header_parameter(char **arg,
     int len = strlen(arg[i]);
     char *result;
 
-    if (arg[i][len - 1] == ':')
+    if (arg[i][len - 1] == ':') {
         return arg[i + 1];
+    }
 
     result = strchr(arg[i], ':');
     if (result)
@@ -227,11 +227,12 @@ void set_signal_handler(char *argv0) {
 }
 
 void print_trace(void) {
-#ifndef DISABLE_STACKTRACE
+#ifndef DISABLE_CXX23
     const std::stacktrace trace = std::stacktrace::current();
     LOG0("Stack trace:\n%s", std::to_string(trace).c_str());
 #else
-    LOG("No stacktrace support compiled in");
+    LOG("C++ compiler does not support C++23 standard and stacktrace support "
+        "is missing");
 #endif
 }
 
@@ -530,6 +531,11 @@ SMutex join_lock;
 
 void add_join_thread(pthread_t t) {
     std::lock_guard<SMutex> lock(join_lock);
+    if (join_pos >= 100) {
+        LOG("ERROR: Maximum thread limit (100) reached, cannot add thread %lx",
+            t);
+        return;
+    }
     join_th[join_pos++] = t;
     LOG("%s: pthread %lx", __FUNCTION__, t);
 }
@@ -788,6 +794,14 @@ int get_random(unsigned char *dest, int len) {
     close(fd);
 
     return len;
+}
+
+uint32_t get_random_uint32() {
+    uint8_t data[4];
+    uint32_t out;
+    get_random(data, sizeof(data));
+    copy32r(out, data, 0);
+    return out;
 }
 
 void _strncpy(char *a, char *b, int n) {

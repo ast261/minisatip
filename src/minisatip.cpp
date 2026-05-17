@@ -25,6 +25,7 @@
 #include "dvb.h"
 #include "pmt.h"
 #include "socketworks.h"
+#include "srt.h"
 #include "stream.h"
 
 #include "utils/ticks.h"
@@ -49,6 +50,10 @@
 #include <syslog.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifndef DISABLE_SRT
+#include <srt/srt.h>
+#endif
 
 #ifndef DISABLE_SATIPCLIENT
 #include "satipc.h"
@@ -267,6 +272,11 @@ const char *built_info[] = {
 #endif
 #ifdef AXE
     "Built for satip-axe",
+#endif
+#ifdef DISABLE_SRT
+    "Built without srt",
+#else
+    "Built with srt",
 #endif
     NULL};
 
@@ -598,7 +608,7 @@ char *get_command_line_string(int argc, char *argv[]) {
     }
 
     char *dest = (char *)malloc(len);
-    memset(dest, 0, sizeof(len));
+    memset(dest, 0, len);
     for (i = 0; i < argc; i++) {
         strcat(dest, argv[i]);
         if (i != argc - 1) {
@@ -829,8 +839,8 @@ void set_options(int argc, char *argv[]) {
         case DVRBUFFER_OPT: {
             sscanf(optarg, "%d:%d", &opts.adapter_buffer, &opts.dvr_buffer);
             opts.adapter_buffer = (opts.adapter_buffer / 188) * 188;
-            if (opts.adapter_buffer < 1316)
-                opts.adapter_buffer = 1316; // 188 * 7 = 1316
+            if (opts.adapter_buffer < MAX_UDP_PACKET_SIZE)
+                opts.adapter_buffer = MAX_UDP_PACKET_SIZE;
 #ifdef AXE
             opts.dvr_buffer += 7 * 188 - 1;
             opts.dvr_buffer -= opts.dvr_buffer % (7 * 188);
@@ -1226,11 +1236,12 @@ int read_rtsp(sockets *s) {
 
     rlen = s->rlen;
     s->rlen = 0;
+    bool log_buf = opts.log & DEFAULT_LOG == DEFAULT_LOG;
 
-    LOG("Read RTSP (sock %d, handle %d) [%s:%d] sid %d, len: %d", s->id,
+    LOG("Read RTSP (sock %d, handle %d) [%s:%d] sid %d, len: %d %s%s", s->id,
         s->sock, get_sockaddr_host(s->sa, ra, sizeof(ra)),
-        get_sockaddr_port(s->sa), s->sid, rlen);
-    LOGM("MSG client >> process :\n%s", s->buf); // LOGM->LOG
+        get_sockaddr_port(s->sa), s->sid, rlen, log_buf ? "\n" : "",
+        log_buf ? (const char *)s->buf : "");
 
     if ((s->type != TYPE_HTTP) &&
         (strncasecmp((const char *)s->buf, "GET", 3) == 0)) {
@@ -1363,6 +1374,12 @@ int read_rtsp(sockets *s) {
                          "%010d;timeout=%d\r\ncom.ses.streamID: %d",
                          get_session_id(s->sid), s_timeout, sid->sid + 1);
                 break;
+            case STREAM_RTSP_SRT:
+                snprintf(buf, sizeof(buf),
+                         "Transport: SRT/AVP;server_port=%d\r\nSession: "
+                         "%010d;timeout=%d\r\ncom.ses.streamID: %d",
+                         opts.rtsp_port, get_session_id(s->sid), s_timeout,
+                         sid->sid + 1);
             }
         }
 
@@ -1511,10 +1528,11 @@ int read_http(sockets *s) {
     sprintf(opts.time_running, "%.0d%s%02d:%02d:%02d", days,
             days > 0 ? "d " : "", hours, mins, secs);
 
-    LOG("Read HTTP (handle %d) [%s:%d] sid %d, sock %d", s->sid,
+    bool log_buf = opts.log & DEFAULT_LOG == DEFAULT_LOG;
+    LOG("Read HTTP (handle %d) [%s:%d] sid %d, sock %d %s%s", s->sid,
         get_sockaddr_host(s->sa, ra, sizeof(ra)), get_sockaddr_port(s->sa),
-        s->sid, s->sock);
-    LOGM("MSG client >> process :\n%s", s->buf);
+        s->sid, s->sock, log_buf ? "\n" : "",
+        log_buf ? (const char *)s->buf : "");
 
     split(arg, (char *)s->buf, ARRAY_SIZE(arg), ' ');
     //      LOG("args: %s -> %s -> %s",arg[0],arg[1],arg[2]);
@@ -1753,10 +1771,10 @@ int ssdp_reply(sockets *s) {
 #ifdef AXE
     axe_set_network_led(1);
 #endif
-
-    LOGM("Received SSDP packet (handle %d) from %s:%d", s->sock,
-         get_sockaddr_host(s->sa, ra, sizeof(ra)), get_sockaddr_port(s->sa));
-    LOGM("MSG querier >> process :\n%s", s->buf);
+    bool log_buf = opts.log & DEFAULT_LOG == DEFAULT_LOG;
+    LOGM("Received SSDP packet (handle %d) from %s:%d %s%s", s->sock,
+         get_sockaddr_host(s->sa, ra, sizeof(ra)), get_sockaddr_port(s->sa),
+         log_buf ? "\n" : "", log_buf ? (const char *)s->buf : "");
 
     if (strncasecmp((const char *)s->buf, "NOTIFY", 6) == 0) {
         rdid = strcasestr((char *)s->buf, "DEVICEID.SES.COM:");
@@ -1807,11 +1825,10 @@ int ssdp_reply(sockets *s) {
             opts.xml_path, opts.name_app, version, opts.uuid, opts.bootid, did);
 
     LOGM("Send Reply SSDP packet (fd: %d) %s:%d, bootid: %d deviceid: %d http: "
-         "%s",
+         "%s\n%s",
          ssdp, get_sockaddr_host(s->sa, ra, sizeof(ra)),
-         get_sockaddr_port(s->sa), opts.bootid, did, opts.http_host);
+         get_sockaddr_port(s->sa), opts.bootid, did, opts.http_host, buf);
     // use ssdp (unicast) even if received to multicast address
-    LOGM("MSG querier << process :\n%s", buf);
     int wb =
         sendto(ssdp, buf, ptr, MSG_NOSIGNAL, &s->sa.sa, SOCKADDR_SIZE(s->sa));
     if (wb != ptr)
@@ -1927,6 +1944,14 @@ int main(int argc, char *argv[]) {
             FAIL("sockets_add failed for ssdp");
     }
 
+#ifndef DISABLE_SRT
+    srt_startup();
+    LOG("SRT library initialized");
+    if (srt_listener_init() < 0)
+        LOG("Warning: SRT listener failed to start (SRT transport will not "
+            "work)");
+#endif
+
     sockets_timeout(si, 60 * 1000);
     set_sockets_rtime(si, -60 * 1000);
     if (0 > sockets_add(rtsp, NULL, -1, TYPE_SERVER, (socket_action)new_rtsp,
@@ -1977,6 +2002,10 @@ int main(int argc, char *argv[]) {
     pmt_destroy();
 #endif
     LOG0("Closing...");
+#ifndef DISABLE_SRT
+    srt_listener_close();
+    srt_cleanup();
+#endif
     free_all();
     free(opts.command_line);
     LOG0("Exit OK.");
@@ -2109,11 +2138,11 @@ void http_response(sockets *s, int rc, char *ah, char *desc, int cseq, int lr) {
     } else
         strlcatf(resp, sizeof(resp) - 1, lresp, "\r\n");
 
-    LOG("Reply %s(handle %d) [%s:%d] content_len:%d, sock %d",
+    bool log_buf = opts.log & DEFAULT_LOG == DEFAULT_LOG;
+    LOG("Reply %s(handle %d) [%s:%d] content_len:%d, sock %d %s%s",
         (lresp == sizeof(resp) - 1) ? "(message truncated) " : "", s->sock,
         get_sockaddr_host(s->sa, ra, sizeof(ra)), get_sockaddr_port(s->sa), lr,
-        s->id);
-    LOGM("MSG client << process :\n%s", resp);
+        s->id, log_buf ? "\n" : "", log_buf ? resp : "");
 
     struct iovec iov[2];
     iov[0].iov_base = resp;
