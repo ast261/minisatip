@@ -207,11 +207,13 @@ char *get_adapter_pids(int aid, char *dest, int max_size);
 int adapter_timeout(sockets *s);
 void adapter_set_dvr(adapter *ad);
 char is_adapter_disabled(int i);
+#ifdef AXE
 inline adapter *get_configured_adapter_nw(int aid) {
     if (aid < 0 || aid >= MAX_ADAPTERS || !a[aid] || is_adapter_disabled(aid))
         return NULL;
     return a[aid];
 }
+#endif
 void set_adapters_delsys(char *o);
 void set_lnb_adapters(char *o);
 void set_signal_multiplier(char *o);

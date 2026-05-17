@@ -1278,6 +1278,14 @@ adapter *get_adapter1(int aid, const char *file, int line) {
     return a[aid];
 }
 
+#ifndef AXE
+inline adapter *get_configured_adapter_nw(int aid) {
+    if (aid < 0 || aid >= MAX_ADAPTERS || !a[aid] || disabled[aid]) {
+        return NULL;
+    }
+    return a[aid];
+}
+#endif
 
 char *itoa_positive(char *dest, int val) {
     dest[0] = 0;
