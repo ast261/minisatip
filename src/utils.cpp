@@ -26,7 +26,7 @@
 #include "minisatip.h"
 #include "pmt.h"
 #include "socketworks.h"
-#include "utils/alloc.h"
+
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -53,15 +53,14 @@
 #include <time.h>
 #include <unistd.h>
 
-#if !defined(__mips__)
-#include <execinfo.h>
+#ifndef DISABLE_STACKTRACE
+#include <iostream>
+#include <stacktrace>
 #endif
 
 #define DEFAULT_LOG LOG_UTILS
 
 char pn[256];
-
-SMutex utils_mutex;
 
 int split(char **rv, char *s, int lrv, char sep) {
     int i = 0, j = 0;
@@ -227,28 +226,13 @@ void set_signal_handler(char *argv0) {
     }
 }
 
-int addr2line(char const *const program_name, void const *const addr) {
-    char addr2line_cmd[512] = {0};
-
-    sprintf(addr2line_cmd, "addr2line -f -p -e %.256s %p", program_name, addr);
-    return system(addr2line_cmd);
-}
-
 void print_trace(void) {
-    void *array[10];
-    size_t size = 0;
-    size_t i;
-#ifdef backtrace
-    size = backtrace(array, 10);
+#ifndef DISABLE_STACKTRACE
+    const std::stacktrace trace = std::stacktrace::current();
+    LOG0("Stack trace:\n%s", std::to_string(trace).c_str());
+#else
+    LOG("No stacktrace support compiled in");
 #endif
-
-    printf("Obtained %zu stack frames.\n", size);
-
-    for (i = 0; i < size; i++) {
-        printf("%p : ", array[i]);
-        if (addr2line(pn, array[i]))
-            printf("\n");
-    }
 }
 
 extern int run_loop;
@@ -524,34 +508,19 @@ void set_thread_prio(pthread_t tid, int prio) {
 
 struct struct_array {
     char enabled;
-    SMutex mutex;
 };
 
-// leaves sa[i]->mutex locked
-int add_new_lock(void **arr, int count, int size, SMutex *mutex) {
+// Find the first free slot in the array and return the index or -1 if no free
+// element found it requires first element to be "char enabled" to test if the
+// element is free does not handle the locking which should be handled by the
+// caller
+int find_new_id(void **arr, int count) {
     int i;
     struct struct_array **sa = (struct struct_array **)arr;
-    mutex_init(mutex);
-    mutex_lock(mutex);
     for (i = 0; i < count; i++)
         if (!sa[i] || !sa[i]->enabled) {
-            if (!sa[i]) {
-                sa[i] = (struct struct_array *)_malloc(size);
-                if (!sa[i]) {
-                    mutex_unlock(mutex);
-                    LOG("Could not allocate memory for %p index %d", arr, i);
-                    return -1;
-                }
-                memset(sa[i], 0, size);
-            }
-            mutex_init(&sa[i]->mutex);
-            // coverity[use : FALSE]
-            mutex_lock(&sa[i]->mutex);
-            sa[i]->enabled = 1;
-            mutex_unlock(mutex);
             return i;
         }
-    mutex_unlock(mutex);
     return -1;
 }
 
@@ -560,18 +529,14 @@ int join_pos = 0;
 SMutex join_lock;
 
 void add_join_thread(pthread_t t) {
-    mutex_init(&join_lock);
-    mutex_lock(&join_lock);
+    std::lock_guard<SMutex> lock(join_lock);
     join_th[join_pos++] = t;
     LOG("%s: pthread %lx", __FUNCTION__, t);
-    mutex_unlock(&join_lock);
 }
 
 void join_thread() {
     int i, rv;
-    if (!join_lock.enabled)
-        return;
-    mutex_lock(&join_lock);
+    std::lock_guard<SMutex> lock(join_lock);
     //	LOG("starting %s", __FUNCTION__);
     for (i = 0; i < join_pos; i++) {
         LOGM("Joining thread %lx", join_th[i]);
@@ -580,7 +545,6 @@ void join_thread() {
                 strerror(rv));
     }
     join_pos = 0;
-    mutex_unlock(&join_lock);
 }
 
 int init_utils(char *arg0) {
@@ -857,8 +821,8 @@ int is_rtsp_http_header(char *buf, int len, const char *start[], int lstart) {
     if (!cl)
         return 1;
 
-    // When RTP/TCP is used on SAT>IP adapters, responses are 4 bytes larger 
-    // than expected, so we just check that the specified content length fits 
+    // When RTP/TCP is used on SAT>IP adapters, responses are 4 bytes larger
+    // than expected, so we just check that the specified content length fits
     // within the buffer, not that the length matches exactly.
     int icl = map_intd(cl + 15, NULL, 0);
     if (nlnl + icl > buf + len)
@@ -883,16 +847,10 @@ int is_rtsp_request(char *buf, int len) {
     return is_rtsp_http_header(buf, len, start, 5);
 }
 
-/*
-void write_buf_to_file(char *file, uint8_t *buf, int len)
-{
-        int x = open(file, O_RDWR);
-        if (x >= 0)
-        {
-                write(x, buf, len);
-                close(x);
-        }
-        else
-                LOG("Could not write %d bytes to %s: %d", len, file, errno);
+int is_byte_array_empty(uint8_t *b, int len) {
+    for (int i = 0; i < len; i++) {
+        if (b[i] != 0)
+            return 0;
+    }
+    return 1;
 }
-*/

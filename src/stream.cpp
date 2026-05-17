@@ -17,6 +17,14 @@
  * USA
  *
  */
+#include "stream.h"
+#include "adapter.h"
+#include "api/symbols.h"
+#include "api/variables.h"
+#include "dvb.h"
+#include "minisatip.h"
+#include "pmt.h"
+#include "socketworks.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -35,16 +43,8 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include <vector>
 
-#include "adapter.h"
-#include "api/symbols.h"
-#include "api/variables.h"
-#include "dvb.h"
-#include "minisatip.h"
-#include "pmt.h"
-#include "socketworks.h"
-#include "stream.h"
-#include "utils/alloc.h"
 #include "utils/ticks.h"
 
 #define DEFAULT_LOG LOG_STREAM
@@ -190,10 +190,8 @@ streams *setup_stream(char *str, sockets *s) {
         if (!(sid = get_sid(s_id)))
             LOG_AND_RETURN(NULL, "Could not add a new stream");
 
-        mutex_lock(&sid->mutex);
-        set_sock_lock(
-            s->id,
-            &sid->mutex); // lock the mutex as the sockets_unlock will unlock it
+        std::lock_guard<SMutex> lock(sid->mutex);
+
         s->sid = s_id;
         sid->sock = s->sock;
 
@@ -206,7 +204,6 @@ streams *setup_stream(char *str, sockets *s) {
                                "sockets_add failed for stream timeout sid %d",
                                sid->sid);
             sockets_timeout(sid->st_sock, 200);
-            set_sock_lock(sid->st_sock, &sid->mutex);
         }
 
         LOG("Setup stream done: sid %d for sock %d handle %d", s_id, s->id,
@@ -217,6 +214,7 @@ streams *setup_stream(char *str, sockets *s) {
                        "stream sid %d not enabled for sock_id %d handle %d",
                        s->sid, s->id, s->sock);
 
+    std::lock_guard<SMutex> lock(sid->mutex);
     set_stream_parameters(s->sid, &t);
     sid->do_play = 0;
 
@@ -226,6 +224,7 @@ streams *setup_stream(char *str, sockets *s) {
         int ad = sid->adapter;
         if (!strstr(tmp_str, "addpids") && !strstr(tmp_str, "delpids")) {
             close_adapter_for_stream(sid->sid, ad, 0);
+            sid->adapter = -1;
         }
     }
 
@@ -235,6 +234,7 @@ streams *setup_stream(char *str, sockets *s) {
 int start_play(streams *sid, sockets *s) {
     int a_id;
     adapter *ad;
+    std::lock_guard<SMutex> lock(sid->mutex);
 
     if (sid->type == 0 && s->type == TYPE_HTTP) {
         sid->type = STREAM_HTTP;
@@ -339,18 +339,14 @@ int close_stream_for_socket(sockets *s) {
 int close_stream(int i) {
     int ad;
     streams *sid;
+    std::lock_guard<SMutex> lock(st_mutex);
     LOG("closing stream %d", i);
-    if (i < 0 || i >= MAX_STREAMS || !st[i] || !st[i]->enabled)
-        return 0;
-
-    sid = st[i];
-    mutex_lock(&sid->mutex);
-    if (!sid->enabled) {
-        adapter_unlock(sid->adapter);
-        mutex_unlock(&sid->mutex);
+    if (i < 0 || i >= MAX_STREAMS || !st[i] || !st[i]->enabled) {
         return 0;
     }
-    mutex_lock(&st_mutex);
+
+    sid = st[i];
+    std::lock_guard<SMutex> lock2(st[i]->mutex);
     sockets_set_flush_enqued_data(sid->rsock_id);
     sid->enabled = 0;
     sid->start_streaming = 0;
@@ -359,21 +355,19 @@ int close_stream(int i) {
     sid->adapter = -1;
     if (sid->type == STREAM_RTSP_UDP && sid->rsock_id > 0) {
         LOG("Closing RTP sock %d handle %d", sid->rsock_id, sid->rsock);
-        sockets_del(sid->rsock_id);
+        sockets_force_close(sid->rsock_id);
     }
     sid->rsock = -1;
 
-    mutex_destroy(&sid->mutex);
-
     if (sid->rtcp_sock > 0 || sid->rtcp > 0) {
         LOG("Closing RTCP sock %d handle %d", sid->rtcp_sock, sid->rtcp);
-        sockets_del(sid->rtcp_sock);
+        sockets_force_close(sid->rtcp_sock);
         sid->rtcp_sock = -1;
         sid->rtcp = -1;
     }
 
     if (sid->st_sock > 0) {
-        sockets_del(sid->st_sock);
+        sockets_force_close(sid->st_sock);
         sid->st_sock = -1;
     }
 
@@ -382,7 +376,6 @@ int close_stream(int i) {
 
     sockets_del_for_sid(i);
 
-    mutex_unlock(&st_mutex);
     LOG("closed stream %d", i);
     return 0;
 }
@@ -399,6 +392,7 @@ int decode_transport(sockets *s, char *arg, char *default_rtp, int start_rtp) {
             arg);
         return -1;
     }
+    std::lock_guard<SMutex> lock(sid->mutex);
     l = 0;
     if (arg) {
         if (strstr(arg, "RTP/AVP/TCP")) {
@@ -534,11 +528,15 @@ int decode_transport(sockets *s, char *arg, char *default_rtp, int start_rtp) {
 int streams_add() {
     int i;
     streams *ss;
-    i = add_new_lock((void **)st, MAX_STREAMS, sizeof(streams), &st_mutex);
+    std::lock_guard<SMutex> lock(st_mutex);
+    i = find_new_id((void **)st, MAX_STREAMS);
     if (i == -1)
         LOG_AND_RETURN(-1, "streams_add failed");
+    if (!st[i])
+        st[i] = new streams();
 
     ss = st[i];
+    std::lock_guard<SMutex> lock2(ss->mutex);
     ss->enabled = 1;
     ss->adapter = -1;
     ss->sid = i;
@@ -558,7 +556,6 @@ int streams_add() {
     ss->timeout = opts.timeout_sec;
     ss->wtime = ss->rtcp_wtime = getTick();
 
-    mutex_unlock(&ss->mutex);
     return i;
 }
 
@@ -726,19 +723,6 @@ int flush_stream(streams *sid, struct iovec *iov, int iiov, int64_t ctime) {
         __FUNCTION__, rv, sid->sid, sid->rsock, sid->rsock_id, sid->seq,
         get_stream_rhost(sid->sid, ra, sizeof(ra)), get_stream_rport(sid->sid));
 
-#ifdef DEBUG
-    static int fd;
-    char fn[50];
-    sprintf(fn, "freq=%d.ts", sid->tp.freq / 1000);
-    fd = open(fn, O_WRONLY);
-    if (fd < 0)
-        fd = open(fn, O_CREAT | O_WRONLY, 0666);
-    if (fd) {
-        lseek(fd, 0, 2);
-        writev(fd, iov, iiov);
-        close(fd);
-    }
-#endif
     sid->wtime = ctime;
     sid->len = 0;
 
@@ -1008,7 +992,6 @@ int process_packets_for_stream(streams *sid, adapter *ad) {
     flush_stream(sid, iov, iiov, rtime);
     return 0;
 }
-
 int process_dmx(sockets *s) {
     int i;
     adapter *ad;
@@ -1060,13 +1043,33 @@ int process_dmx(sockets *s) {
     return 0;
 }
 
+std::vector<SMutex *> lock_streams_for_adapter(int aid) {
+    streams *sid;
+    std::vector<SMutex *> locks;
+    for (int i = 0; i < MAX_STREAMS; i++)
+        if ((sid = get_sid_nw(i)) && sid->adapter == aid) {
+            mutex_lock(&sid->mutex);
+            if (!sid->enabled) {
+                mutex_unlock(&sid->mutex);
+                continue;
+            }
+            locks.push_back(&sid->mutex);
+        }
+    return locks;
+}
+void unlock_streams_for_adapter(std::vector<SMutex *> locks) {
+    int i = 0;
+    for (i = locks.size() - 1; i >= 0; i--)
+        mutex_unlock(locks[i]);
+}
+
 // lock order: socket -> stream -> adapter
 // after stream or adapter, avoid locking socket
 
 int read_dmx(sockets *s) {
     static int cnt;
     adapter *ad;
-    int send = 0, force_send = 0, ls, lse;
+    int send = 0, force_send = 0;
     int threshold = opts.udp_threshold;
     int64_t rtime = getTick();
 
@@ -1133,13 +1136,11 @@ int read_dmx(sockets *s) {
         return 0;
 
     ad->flush = 0;
-    ls = lock_streams_for_adapter(ad->id);
-    adapter_lock(ad->id);
+    auto locks = lock_streams_for_adapter(ad->id);
+    mutex_lock(&ad->mutex);
     process_dmx(s);
-    adapter_unlock(ad->id);
-    lse = unlock_streams_for_adapter(ad->id);
-    if (ls != lse)
-        LOG("leak detected %d %d!!! ", ls, lse);
+    mutex_unlock(&ad->mutex);
+    unlock_streams_for_adapter(locks);
     return 0;
 }
 #undef DEFAULT_LOG
@@ -1157,8 +1158,7 @@ int calculate_bw(sockets *s) {
         if (!reads)
             reads = 1;
         if (bw > 2000 || bw_dmx > 2000) {
-            mutex_init(&bw_mutex);
-            mutex_lock(&bw_mutex);
+            std::lock_guard<SMutex> lock(bw_mutex);
             c_bw = bw / 1024;
             c_bw_dmx = bw_dmx / 1024;
             c_tbw = tbw / 1024576;
@@ -1175,7 +1175,6 @@ int calculate_bw(sockets *s) {
                 c_bw, c_bw_dmx, 1.0 * c_buffered / 1048576,
                 1.0 * c_dropped / 1048576, c_ns_read, c_reads, c_writes,
                 c_failed_writes, c_tt, get_allocated_memory() / 1048576);
-            mutex_unlock(&bw_mutex);
         }
         bw = 0;
         bw_dmx = 0;
@@ -1201,7 +1200,7 @@ int stream_timeout(sockets *s) {
     s->rtime = ctime;
 
     if ((sid = get_sid(s->sid)) && sid->type != STREAM_HTTP) {
-        mutex_lock(&sid->mutex);
+        std::unique_lock<SMutex> lock(sid->mutex);
         rttime = sid->rtcp_wtime, rtime = sid->wtime;
 
         if (sid->do_play && ctime - rtime > 1000) {
@@ -1213,13 +1212,14 @@ int stream_timeout(sockets *s) {
         }
         if (sid->do_play && ctime - rttime >= 200)
             send_rtcp(sid->sid, ctime);
-        mutex_unlock(&sid->mutex);
         // check stream timeout, and allow 10s more to respond
         if ((sid->timeout > 0 && (ctime - sid->rtime > sid->timeout + 10000)) ||
             (sid->timeout == 1)) {
             LOG("Stream timeout sid %d, closing (ctime %jd , sid->rtime %jd, "
                 "sid->timeout %d)",
                 sid->sid, ctime, sid->rtime, sid->timeout);
+
+            lock.unlock();
             close_stream(sid->sid); // do not lock before this
         }
     }
@@ -1242,37 +1242,12 @@ void dump_streams() {
                 get_stream_rport(sid->sid));
 }
 
-int lock_streams_for_adapter(int aid) {
-    streams *sid;
-    int i = 0, ls = 0;
-    for (i = 0; i < MAX_STREAMS; i++)
-        if ((sid = get_sid_nw(i)) && sid->adapter == aid) {
-            mutex_lock(&sid->mutex);
-            if ((sid = get_sid_nw(i)) && (sid->adapter != aid))
-                mutex_unlock(&sid->mutex);
-            else
-                ls++;
-        }
-    return ls;
-}
-
-int unlock_streams_for_adapter(int aid) {
-    streams *sid;
-    int i = 0, ls = 0;
-    for (i = MAX_STREAMS - 1; i >= 0; i--)
-        if ((sid = get_sid_nw(i)) && sid->adapter == aid) {
-            mutex_unlock(&sid->mutex);
-            ls++;
-        }
-    return ls;
-}
-
 void free_all_streams() {
     int i;
-
+    std::lock_guard<SMutex> lock(st_mutex);
     for (i = 0; i < MAX_STREAMS; i++) {
         if (st[i])
-            _free(st[i]);
+            delete st[i];
         st[i] = NULL;
     }
 }

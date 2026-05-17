@@ -2,6 +2,7 @@
 #define PMT_H
 #include "adapter.h"
 #include "dvb.h"
+#include <unordered_map>
 
 #define MAX_CAID 20
 #define MAX_ACTIVE_PIDS 20
@@ -114,7 +115,6 @@ typedef struct struct_pmt_ca {
 
 typedef struct struct_pmt {
     char enabled;
-    SMutex mutex;
     int sid;
     int pid;
     int pcr_pid;
@@ -141,6 +141,7 @@ typedef struct struct_pmt {
     int first_active_pid;
     int64_t grace_time, start_time;
     int filter;
+    std::unordered_map<uint64_t, int> *global_start, *local_start;
 } SPMT;
 
 // filters can be setup for specific pids and masks
@@ -155,7 +156,6 @@ typedef struct struct_pmt {
 
 typedef struct struct_filter {
     char enabled;
-    SMutex mutex;
     int id;
     int pid;
     int adapter;
@@ -214,8 +214,6 @@ int set_filter_mask(int id, uint8_t *filter, uint8_t *mask);
 int set_filter_flags(int id, int flags);
 int set_filter_opaque(int id, void *opaque);
 int get_pid_filter(int aid, int pid);
-int get_filter_pid(int filter);
-int get_filter_adapter(int filter);
 int assemble_packet(SFilter *f, uint8_t *b);
 void disable_cw(int master_pmt);
 void expire_cw_for_pmt(int master_pmt, int parity, int64_t min_expiry);

@@ -33,7 +33,6 @@ alternative source
 #include "search.h"
 #include "socketworks.h"
 #include "tables.h"
-#include "utils/alloc.h"
 #include <linux/dvb/ca.h>
 
 #include "api/symbols.h"
@@ -156,7 +155,7 @@ typedef struct opfr_operator_tune_descr {
     char delsys[8];
     char mod[8];
     double sr;
-    char fec[4];
+    char fec[5];
 } opfr_operator_tune_descr_t;
 
 // EN 300 468, tables 36, 38, and 41
@@ -677,7 +676,7 @@ static void element_invalidate(struct cc_ctrl_data *cc_data, unsigned int id) {
 
     e = element_get(cc_data, id);
     if (e) {
-        _free(e->data);
+        free(e->data);
         memset(e, 0, sizeof(struct element));
     }
 }
@@ -703,8 +702,8 @@ static int element_set(struct cc_ctrl_data *cc_data, unsigned int id,
         return 0;
     }
 
-    _free(e->data);
-    e->data = (uint8_t *)_malloc(size);
+    free(e->data);
+    e->data = (uint8_t *)malloc(size);
     memcpy(e->data, data, size);
     e->size = size;
     e->valid = 1;
@@ -1571,7 +1570,7 @@ static int ci_ccmgr_cc_sac_data_req(ca_session_t *session, const uint8_t *data,
     uint32_t data_cnf_tag = CIPLUS_TAG_CC_SAC_DATA_CNF;
     uint8_t dest[2048];
     uint8_t tmp[len];
-    int id_bitmask, dt_nr;
+    uint8_t id_bitmask, dt_nr;
     unsigned int serial;
     int answ_len;
     int pos = 0;
@@ -1788,25 +1787,6 @@ static int CIPLUS_APP_LANG_handler(ca_session_t *session, int tag,
     return 0;
 }
 
-static int CIPLUS_APP_SAS_handler(ca_session_t *session, int tag, uint8_t *data,
-                                  int data_length) {
-    hexdump("CIPLUS_APP_SAS_handler", data, data_length);
-
-    switch (tag) {
-    case CIPLUS_TAG_SAS_CONNECT_CNF: /* */
-    {
-        if (data[8] == 0) {
-            ca_write_apdu(session, 0x9f9a07, 0x00, 0);
-        }
-        break;
-    }
-    default:
-        LOG("unknown SAS apdu tag %03x", tag);
-    }
-
-    return 0;
-} /* not working, just for fun */
-
 static void parse_operator_tune_descriptor(const uint8_t *descr,
                                            opfr_operator_tune_descr_t *out) {
     // Frequency
@@ -1841,21 +1821,19 @@ static int CIPLUS_APP_OPRF_handler(ca_session_t *session, int tag,
                                    uint8_t *data, int data_length) {
     hexdump("CIPLUS_APP_OPRF_handler", data, data_length);
 
-    uint8_t data_oprf_search[9];
-    data_oprf_search[0] = 0x03; /* unattended mode bit=0 + length in bytes
-                                   of the service types */
+    uint8_t data_oprf_search[8];
+    data_oprf_search[0] = (0 << 7) | 0x03; /* unattended mode bit=0 + length in
+                                              bytes of the service types */
     data_oprf_search[1] = 0x01; /* service MPEG-2 television (0x01) */
     data_oprf_search[2] = 0x16; /* service h264 SD (0x16) */
     data_oprf_search[3] = 0x19; /* service h264 HD (0x19) */
     data_oprf_search[4] = 0x02; /* length in bytes of the delivery_capability */
     data_oprf_search[5] = 0x43; /* DVB-S */
     data_oprf_search[6] = 0x79; /* DVB-S2 */
-    data_oprf_search[7] =
-        0x01; /* length in bytes of the application_capability */
-    data_oprf_search[8] = 0x00; /* System Software Update service */
+    data_oprf_search[7] = 0x00; /* application_capability_loop_length */
 
     uint8_t data_oprf_tune_status[] = {
-        0xFF, // descruptor number
+        0xFF, // descriptor number
         0x00, // signal strength and quality
         0x00,
         (0x03 << 4), // status + 4 bit length
@@ -1899,7 +1877,7 @@ static int CIPLUS_APP_OPRF_handler(ca_session_t *session, int tag,
         int cicam_original_network_id = (data[1] << 8) + data[2];
         char lang_code[4] = {0};
         strncpy(lang_code, (char *)data + 10, 3);
-        char *profile_name = (char *)_malloc(data[13]);
+        char *profile_name = (char *)malloc(data[13]);
         strncpy(profile_name, (char *)data + 14, data[13]);
 
         LOG("Received operator_info APDU: \n"
@@ -1914,7 +1892,7 @@ static int CIPLUS_APP_OPRF_handler(ca_session_t *session, int tag,
         // Initiate a profile search
         ca_write_apdu(session, CIPLUS_TAG_OPERATOR_SEARCH_START,
                       data_oprf_search, sizeof(data_oprf_search));
-        _free(profile_name);
+        free(profile_name);
         break;
     }
     case CIPLUS_TAG_OPERATOR_TUNE: {
@@ -1995,7 +1973,7 @@ static int ca_send_datetime(ca_device_t *d) {
     tv %= 3600;
     uint8_t mm = tv / 60;
     tv %= 60;
-    uint8_t ss = tv;
+    uint8_t ss = (uint8_t)tv;
 
     msg[0] = (mjd >> 8) & 0xff;
     msg[1] = mjd & 0xff;
@@ -2239,7 +2217,13 @@ int APP_MMI_handler(ca_session_t *session, int resource, uint8_t *buffer,
             DEBUGM("[%d] text tag: %02x %02x %02x", i, data[0], data[1],
                    data[2]);
             data += 3;
-            data += asn_1_decode(&textlen, data);
+            int llen = asn_1_decode(&textlen, data);
+            if (llen < 0) {
+                LOG("CA %d asn_1_decode failed: %02X %02X %02X", d->id, data[0],
+                    data[1], data[2]);
+                break;
+            }
+            data += llen;
             DEBUGM("[%d] %d bytes text", i, textlen);
             if ((data + textlen) > max)
                 break;
@@ -2261,14 +2245,6 @@ int APP_MMI_handler(ca_session_t *session, int resource, uint8_t *buffer,
             resource);
     }
 
-    return 0;
-}
-
-static int APP_SAS_create(ca_session_t *session, int resource_id) {
-    LOG("%s-------------------------", __FUNCTION__);
-    uint8_t data[] = {0x69, 0x74, 0x64, 0x74, 0x74, 0x63, 0x61, 0x00};
-    // private_Host_application_ID
-    ca_write_apdu(session, 0x9f9a00, data, sizeof(data));
     return 0;
 }
 
@@ -2335,8 +2311,6 @@ struct struct_application_handler application_handler[] = {
     DEFAPP(CIPLUS_APP_OPRF_RESOURCEID, CIPLUS_APP_OPRF_handler, NULL),
     DEFAPP(TS103205_APP_OPRF_TWO_RESOURCEID, CIPLUS_APP_OPRF_handler, NULL),
     DEFAPP(TS103205_APP_OPRF_THREE_RESOURCEID, CIPLUS_APP_OPRF_handler, NULL),
-    // SAS
-    DEFAPP(CIPLUS_APP_SAS_RESOURCEID, CIPLUS_APP_SAS_handler, APP_SAS_create),
     // Application MMI
     DEFAPP(TS101699_APP_AMMI_RESOURCEID, APP_empty, NULL),
     DEFAPP(CIPLUS_APP_AMMI_RESOURCEID, APP_empty, NULL),
@@ -2662,6 +2636,11 @@ int ca_read_apdu(ca_session_t *session, uint8_t *buf, int buf_len) {
     while (i < buf_len) {
         data = buf + i;
         llen = asn_1_decode(&len, data + 3);
+        if (llen < 0) {
+            LOG("Invalid APDU length %02X %02X %02X", data[3], data[4],
+                data[5]);
+            return 1;
+        }
         tag = (data[0] << 16) | (data[1] << 8) | data[2];
         // data points to the actual APDU data
         data += 3 + llen;
@@ -2697,6 +2676,12 @@ int ca_read(sockets *s) {
     if (d->state == CA_STATE_INACTIVE)
         d->state = CA_STATE_ACTIVE;
 
+    if (llen < 0) {
+        s->rlen = 0;
+        LOG("Invalid SPDU length %02X %02X %02X", data[1], data[2], data[3]);
+        return 0;
+    }
+
     switch (tag) {
     case ST_OPEN_SESSION_REQUEST: {
         copy32r(resource_identifier, data, 2);
@@ -2709,8 +2694,8 @@ int ca_read(sockets *s) {
             session->handler.name, status);
         pkt[0] = status;
         copy32(pkt, 1, resource_identifier);
-        ca_write_spdu(d, session->session_number, ST_OPEN_SESSION_RESPONSE, pkt,
-                      5, NULL, 0);
+        ca_write_spdu(d, session ? session->session_number : -1,
+                      ST_OPEN_SESSION_RESPONSE, pkt, 5, NULL, 0);
         if (!status && session->handler.create)
             session->handler.create(session, resource_identifier);
 
@@ -2865,7 +2850,7 @@ int ca_init_en50221(ca_device_t *d) {
 }
 
 ca_device_t *alloc_ca_device() {
-    ca_device_t *d = (ca_device_t *)_malloc(sizeof(ca_device_t));
+    ca_device_t *d = (ca_device_t *)malloc(sizeof(ca_device_t));
     if (!d) {
         LOG_AND_RETURN(NULL, "Could not allocate memory for CA device");
     }

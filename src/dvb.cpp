@@ -152,16 +152,16 @@ int detect_dvb_parameters(char *s, transponder *tp) {
     tp->freq = -1;
     tp->inversion = -1;
     tp->hprate = -1;
-    tp->tmode = -1;
-    tp->gi = -1;
+    tp->tmode = (fe_transmit_mode_t)-1;
+    tp->gi = (fe_guard_interval_t)-1;
     tp->bw = -1;
     tp->sm = -1;
     tp->t2id = -1;
     tp->fe = -1;
     tp->ro = -1;
-    tp->mtype = -1;
+    tp->mtype = (fe_modulation_t)-1;
     tp->plts = -1;
-    tp->fec = -1;
+    tp->fec = (fe_code_rate_t)-1;
     tp->sr = -1;
     tp->pol = -1;
     tp->diseqc = -1;
@@ -202,15 +202,17 @@ int detect_dvb_parameters(char *s, transponder *tp) {
         if (strncmp("ro=", arg[i], 3) == 0)
             tp->ro = map_int(arg[i] + 3, (char **)fe_rolloff);
         if (strncmp("mtype=", arg[i], 6) == 0)
-            tp->mtype = map_int(arg[i] + 6, (char **)fe_modulation);
+            tp->mtype =
+                (fe_modulation_t)map_int(arg[i] + 6, (char **)fe_modulation);
         if (strncmp("fec=", arg[i], 4) == 0)
-            tp->fec = map_int(arg[i] + 4, (char **)fe_fec);
+            tp->fec = (fe_code_rate_t)map_int(arg[i] + 4, (char **)fe_fec);
         if (strncmp("plts=", arg[i], 5) == 0)
             tp->plts = map_int(arg[i] + 5, (char **)fe_pilot);
         if (strncmp("gi=", arg[i], 3) == 0)
-            tp->gi = map_int(arg[i] + 3, (char **)fe_gi);
+            tp->gi = (fe_guard_interval_t)map_int(arg[i] + 3, (char **)fe_gi);
         if (strncmp("tmode=", arg[i], 6) == 0)
-            tp->tmode = map_int(arg[i] + 6, (char **)fe_tmode);
+            tp->tmode =
+                (fe_transmit_mode_t)map_int(arg[i] + 6, (char **)fe_tmode);
         if (strncmp("bw=", arg[i], 3) == 0) {
             tp->bw = map_float(arg[i] + 3, 1000000);
             if (tp->bw < 0 ||
@@ -1064,10 +1066,15 @@ int setup_switch(adapter *ad) {
                 master->old_diseqc != diseqc)
                 change_par = 1;
 
+            uint8_t old_used_slave =
+                master->used[ad->id]; // save the old used flag
+            master->used[ad->id] = 0;
+
             if (!master->sid_cnt &&
-                !(master->used &
-                  ~(1 << ad->id))) // the master is not used by another adapters
+                is_byte_array_empty(master->used, sizeof(master->used)))
                 do_setup_switch = 1;
+
+            master->used[ad->id] = old_used_slave; // restore the old used
 
             if (change_par && !do_setup_switch) {
                 LOG("Slave adapter %d wants to change the paramters of the "
@@ -1436,7 +1443,7 @@ int dvb_demux_set_pid(adapter *a, int i_pid) {
         }
         LOG("AD %d [dvr %d %d], setting filter on PID %d for fd %d, active "
             "pids %d",
-            a->id, fd, a->active_pids);
+            a->id, a->pa, a->fn, i_pid, fd, a->active_pids);
         return fd;
     }
 
@@ -1957,7 +1964,7 @@ int dvb_get_signal(adapter *ad) {
         snr = 255;
 
     // Lock the adapter while doing changes
-    adapter_lock(ad->id);
+    std::lock_guard<SMutex> lock(ad->mutex);
     ad->snr = snr;
     ad->db = dbvalue;
     ad->strength = strength;
@@ -1969,8 +1976,6 @@ int dvb_get_signal(adapter *ad) {
          (ad->tp.diseqc_param.switch_type == SWITCH_UNICABLE))) {
         setup_switch(ad);
     }
-
-    adapter_unlock(ad->id);
     return 0;
 }
 

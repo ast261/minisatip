@@ -27,7 +27,7 @@
 #include <time.h>
 #include <unistd.h>
 // #include <linux/ioctl.h>
-#include "utils/alloc.h"
+
 #include <sys/ioctl.h>
 
 #include "adapter.h"
@@ -72,8 +72,7 @@ int16_t fe_map[2 * MAX_ADAPTERS];
 void find_dvb_adapter(adapter **a);
 
 adapter *adapter_alloc() {
-    adapter *ad = (adapter *)_malloc(sizeof(adapter));
-    memset(ad, 0, sizeof(adapter));
+    adapter *ad = new adapter();
 
     /* diseqc setup */
     ad->diseqc_param.fast = opts.diseqc_fast;
@@ -112,10 +111,8 @@ adapter *adapter_alloc() {
 
     ad->drop_encrypted = opts.drop_encrypted;
 
-    if (!ad->buf) {
-        ad->lbuf = opts.adapter_buffer;
-        ad->buf = (unsigned char *)_malloc(ad->lbuf + 10);
-    }
+    ad->lbuf = opts.adapter_buffer;
+    ad->buf = (unsigned char *)malloc(ad->lbuf + 10);
 
 #ifndef DISABLE_PMT
     // filter for pid 0
@@ -183,8 +180,8 @@ int adapter_timeout(sockets *s) {
     for (i = 0; i < MAX_ADAPTERS; i++)
         if (a[i] && (a[i]->master_source == ad->id) && ad->enabled &&
             a[i]->enabled) {
-            LOG("adapter %d is already used by a slave adapters %d, used %jx",
-                ad->id, a[i]->id, a[i]->used);
+            LOG("adapter %d is already used by a slave adapters %d", ad->id,
+                a[i]->id);
             do_close = 0;
             break;
         }
@@ -248,15 +245,15 @@ int init_hw(int i) {
         return 2;
 
     ad = a[i];
-    mutex_init(&ad->mutex);
-    mutex_lock(&ad->mutex);
+    std::lock_guard<SMutex> lock(ad->mutex);
     if (is_adapter_disabled(i)) {
-        rv = 3;
-        goto NOK;
+        LOG_AND_RETURN(
+            1, "opening adapter %i failed because adapter is disabled", ad->id);
     }
     if (ad->enabled) {
-        rv = 4;
-        goto NOK;
+        LOG_AND_RETURN(
+            1, "opening adapter %i failed because adapter is already enabled",
+            ad->id);
     }
 
     ad->id = i;
@@ -272,8 +269,10 @@ int init_hw(int i) {
 
     st = getTick();
     if (!ad->open) {
-        rv = 5;
-        goto NOK;
+        LOG_AND_RETURN(1,
+                       "opening adapter %i failed because adapter does not "
+                       "have an open method",
+                       ad->id);
     }
 
     if (opts.enigma && ad->dmx_source == -1)
@@ -281,15 +280,17 @@ int init_hw(int i) {
 
     if ((rv = ad->open(ad))) {
         init_complete = 0;
-        LOG("Opening adapter %d failed with error %d", ad->id, rv);
-        rv |= 0x600;
-        goto NOK;
+        LOG_AND_RETURN(
+            1, "opening adapter %i failed to open the adapter with code %d",
+            ad->id, rv);
     }
     ad->enabled = 1;
 
     if (!ad->buf) {
-        rv = 7;
-        goto NOK;
+        LOG_AND_RETURN(1,
+                       "opening adapter %i failed because adapter the adapter "
+                       "buffer was not initialized",
+                       ad->id);
     }
     memset(ad->buf, 0, opts.adapter_buffer + 1);
     init_dvb_parameters(&ad->tp);
@@ -335,28 +336,19 @@ int init_hw(int i) {
         get_delsys(ad->sys[3]));
     getAdaptersCount();
 
-    mutex_unlock(&ad->mutex);
-
     if ((ad->master_source >= 0) && (ad->master_source < MAX_ADAPTERS)) {
         return init_hw(ad->master_source);
     }
 
     return 0;
-
-NOK:
-    LOG("opening adapter %i failed with exit code %d", ad->id, rv);
-    mutex_unlock(&ad->mutex);
-    return 1;
 }
 
 int init_all_hw() {
     int i, rv;
-
+    std::lock_guard<SMutex> lock(a_mutex);
     LOG("starting init_all_hw %d", init_complete);
     if (init_complete)
         return num_adapters;
-    mutex_init(&a_mutex);
-    mutex_lock(&a_mutex);
     find_adapters();
     num_adapters = 0;
     init_complete = 1;
@@ -375,7 +367,6 @@ int init_all_hw() {
     if (num_adapters == 0)
         init_complete = 0;
     LOG("done init_hw %d", init_complete);
-    mutex_unlock(&a_mutex);
     return num_adapters;
 }
 
@@ -391,9 +382,8 @@ int close_adapter(int na) {
     if (!ad)
         return 1;
 
-    mutex_lock(&ad->mutex);
+    std::lock_guard<SMutex> lock(ad->mutex);
     if (!ad->enabled) {
-        mutex_unlock(&ad->mutex);
         return 1;
     }
 
@@ -432,7 +422,6 @@ int close_adapter(int na) {
         sockets_force_close(sock);
         set_sockets_sid(sock, -1);
     }
-    mutex_destroy(&ad->mutex);
     LOG("done closing adapter %d", na);
     for (i = 0; i < MAX_ADAPTERS; i++)
         if (a[i] && (a[i]->master_source == ad->id) && ad->enabled &&
@@ -601,7 +590,8 @@ int compare_slave_parameters(adapter *ad, transponder *tp) {
     if (!ad)
         return 0;
     // is not a slave and does not have a slave adapter
-    if ((ad->master_source < 0) && !ad->used)
+    if ((ad->master_source < 0) &&
+        is_byte_array_empty(ad->used, sizeof(ad->used)))
         return 0;
     // is slave and the switch is UNICABLE/JESS - we do not care about pol and
     // band
@@ -620,17 +610,17 @@ int compare_slave_parameters(adapter *ad, transponder *tp) {
 
     // master adapter used by slave adapters, check slave parameters if they
     // match
-    if (ad && ad->used) {
+    if (ad && !is_byte_array_empty(ad->used, sizeof(ad->used))) {
         int i;
         for (i = 0; i < MAX_ADAPTERS; i++)
-            if (ad->used & (1ULL << i)) {
+            if (ad->used[i]) {
                 adapter *ad2 = get_adapter(i);
                 if (!ad2) {
                     LOG("adapter %d used is set for adapter %d but it is "
                         "disabled, "
                         "clearing",
                         ad->id, i);
-                    ad->used &= ~(1ULL << i);
+                    ad->used[i] = 0;
                     continue;
                 }
                 if (ad2->old_pol != pol || ad2->old_hiband != hiband ||
@@ -646,10 +636,9 @@ int compare_slave_parameters(adapter *ad, transponder *tp) {
             master->old_diseqc != diseqc)
             return 1; // master parameters matches with the required parameters
     }
-    LOGM("%s: adapter %d used %ld master %d used %ld (pol %d, band %d, diseqc "
+    LOGM("%s: adapter %d master %d (pol %d, band %d, diseqc "
          "%d) not compatible with freq %d, pol %d band %d diseqc %d",
-         __FUNCTION__, ad->id, ad->used,
-         master ? master->id : ad->master_source, master ? master->used : -1,
+         __FUNCTION__, ad->id, master ? master->id : ad->master_source,
          ad->old_pol, ad->old_hiband, ad->old_diseqc, freq, pol, hiband,
          diseqc);
     return 0;
@@ -698,13 +687,13 @@ int get_free_adapter(transponder *tp) {
         fe = -1;
 
     if (ad)
-        LOG("get _free adapter %d - a[%d] => e:%d m:%d sid_cnt:%d src:%d f:%d "
+        LOG("get free adapter %d - a[%d] => e:%d m:%d sid_cnt:%d src:%d f:%d "
             "pol=%d sys: %s %s",
             tp->fe, ad->id, ad->enabled, ad->master_sid, ad->sid_cnt,
             ad->tp.diseqc, ad->tp.freq, ad->tp.pol, get_delsys(ad->sys[0]),
             get_delsys(ad->sys[1]))
     else
-        LOG("get _free adapter %d msys %s requested %s", fe, get_delsys(fe),
+        LOG("get free adapter %d msys %s requested %s", fe, get_delsys(fe),
             get_delsys(msys));
 
     dump_adapters();
@@ -729,7 +718,7 @@ int get_free_adapter(transponder *tp) {
                 return i;
 
     for (i = 0; i < MAX_ADAPTERS; i++) {
-        // first _free adapter that has the same msys
+        // first free adapter that has the same msys
         if ((ad = get_adapter_nw(i)) && ad->sid_cnt == 0 &&
             delsys_match(ad, msys) && !compare_slave_parameters(ad, tp) &&
             source_enabled_for_adapter(ad, tp))
@@ -745,11 +734,11 @@ int get_free_adapter(transponder *tp) {
 
     // No regular tuners available, check for slave tuners
     for (i = 0; i < MAX_ADAPTERS; i++) {
-        // first _free slave adapter that has the same msys
+        // first free slave adapter that has the same msys
         if ((ad = get_adapter_nw(i)) && ad->sid_cnt == 0 &&
             delsys_match(ad, msys) && compare_slave_parameters(ad, tp) &&
             source_enabled_for_adapter(ad, tp)) {
-            LOGM("get _free adapter found slave adapter %d", i);
+            LOGM("get free adapter found slave adapter %d", i);
             return i;
         }
     }
@@ -787,7 +776,7 @@ int set_adapter_for_stream(int sid, int aid) {
     adapter *ad;
     if (!(ad = get_adapter(aid)))
         return -1;
-    mutex_lock(&ad->mutex);
+    std::lock_guard<SMutex> lock(ad->mutex);
 
     if (ad->master_sid == -1)
         ad->master_sid = sid;
@@ -796,13 +785,11 @@ int set_adapter_for_stream(int sid, int aid) {
 
     if (ad->master_source >= 0 && ad->master_source < MAX_ADAPTERS) {
         adapter *ad2 = a[ad->master_source];
-        ad2->used |= (1ULL << ad->id);
+        ad2->used[ad->id] = 1;
     }
     LOG("set adapter %d for sid %d m:%d s:%d", aid, sid, ad->master_sid,
         ad->sid_cnt);
     adapter_update_threshold(ad);
-    mutex_unlock(&ad->mutex);
-
     return 0;
 }
 
@@ -825,7 +812,7 @@ void close_adapter_for_stream(int sid, int aid, int close_stream) {
     if (!(ad = get_adapter(aid)))
         return;
 
-    mutex_lock(&ad->mutex);
+    std::lock_guard<SMutex> lock(ad->mutex);
 
     if (s && s->adapter == aid)
         s->adapter = -1;
@@ -852,17 +839,15 @@ void close_adapter_for_stream(int sid, int aid, int close_stream) {
         if ((ad->master_source >= 0) && (ad->master_source < MAX_ADAPTERS)) {
             adapter *ad2 = a[ad->master_source];
             if (ad2)
-                ad2->used &= ~(1ULL << ad->id);
-            LOGM("adapter %d _freed from slave adapter %d, used %jd",
-                 ad2 ? ad2->id : -1, ad->id, ad2 ? ad2->used : -1);
+                ad2->used[ad->id] = 0;
+            LOGM("adapter %d freed from slave adapter %d", ad2 ? ad2->id : -1,
+                 ad->id);
         }
     } else
         mark_pids_deleted(aid, sid, NULL);
     update_pids(aid);
     adapter_update_threshold(ad);
     adapter_commit(ad);
-
-    mutex_unlock(&ad->mutex);
 }
 
 int update_pids(int aid) {
@@ -990,7 +975,7 @@ int tune(int aid, int sid) {
     if (!ad)
         return -400;
 
-    mutex_lock(&ad->mutex);
+    std::lock_guard<SMutex> lock(ad->mutex);
 
     ad->last_sort = getTick();
     if (sid == ad->master_sid && ad->do_tune) {
@@ -1012,7 +997,6 @@ int tune(int aid, int sid) {
             close_streams_for_adapter(aid, sid);
             if (update_pids(aid)) {
                 ad->do_tune = 0;
-                mutex_unlock(&ad->mutex);
                 return -503;
             }
         }
@@ -1024,7 +1008,6 @@ int tune(int aid, int sid) {
         mark_pids_deleted(aid, sid, NULL);
     if (update_pids(aid)) {
         ad->do_tune = 0;
-        mutex_unlock(&ad->mutex);
         return -503;
     }
     if (flush_data) {
@@ -1033,7 +1016,6 @@ int tune(int aid, int sid) {
     }
     adapter_commit(ad);
     ad->do_tune = 0;
-    mutex_unlock(&ad->mutex);
     return rv;
 }
 
@@ -1252,7 +1234,7 @@ int set_adapter_parameters(int aid, int sid, transponder *tp) {
 
     LOG("setting DVB parameters for adapter %d - master_sid %d sid %d old f:%d",
         aid, ad->master_sid, sid, ad->tp.freq);
-    mutex_lock(&ad->mutex);
+    std::lock_guard<SMutex> lock(ad->mutex);
     if (ad->master_sid == -1)
         ad->master_sid = sid; // master sid was closed
 
@@ -1261,7 +1243,6 @@ int set_adapter_parameters(int aid, int sid, transponder *tp) {
         if (sid != ad->master_sid) // slave sid requesting to tune to a
                                    // different frequency
         {
-            mutex_unlock(&ad->mutex);
             LOG("secondary stream requested tune, not gonna happen ad: f:%d sr:%d pol:%d plp/isi:%d src:%d mod %d -> \
 			new: f:%d sr:%d pol:%d plp/isi:%d src:%d mod %d",
                 ad->tp.freq, ad->tp.sr, ad->tp.pol, ad->tp.plp_isi,
@@ -1273,7 +1254,6 @@ int set_adapter_parameters(int aid, int sid, transponder *tp) {
         mark_pids_deleted(aid, -1, NULL);
         if (update_pids(aid)) {
             ad->do_tune = 0;
-            mutex_unlock(&ad->mutex);
             return -1;
         }
     }
@@ -1290,7 +1270,6 @@ int set_adapter_parameters(int aid, int sid, transponder *tp) {
     {
         mark_pids_deleted(aid, sid, NULL); // delete all the pids for this
         if (mark_pids_add(sid, aid, ad->tp.pids) < 0) {
-            mutex_unlock(&ad->mutex);
             return -1;
         }
     }
@@ -1301,12 +1280,10 @@ int set_adapter_parameters(int aid, int sid, transponder *tp) {
     if (ad->tp.apids) {
         if (mark_pids_add(sid, aid, ad->tp.apids ? ad->tp.apids : ad->tp.pids) <
             0) {
-            mutex_unlock(&ad->mutex);
             return -1;
         }
     }
 
-    mutex_unlock(&ad->mutex);
     return 0;
 }
 
@@ -1463,8 +1440,8 @@ void free_all_adapters() {
             if (a[i]->free)
                 a[i]->free(a[i]);
             if (a[i]->buf)
-                _free(a[i]->buf);
-            _free(a[i]);
+                free(a[i]->buf);
+            delete a[i];
             a[i] = NULL;
         }
 
@@ -2092,7 +2069,7 @@ int signal_thread(sockets *s __attribute__((unused))) {
             0) // make sure the kernel has updated the status
             continue;
         // do not get the signal when the adapter is being changed
-        if (ad->mutex.state != 0)
+        if (!ad->mutex.try_lock())
             continue;
         ts = getTick();
         ad->get_signal(ad);
@@ -2103,60 +2080,10 @@ int signal_thread(sockets *s __attribute__((unused))) {
                 "%d, strength:%d, snr: %d, force scan %d)",
                 (ad->new_gs == 1) ? "_new" : "", ctime - ts, ad->id, ad->fe,
                 ad->status, ad->ber, ad->strength, ad->snr, opts.force_scan);
+        ad->mutex.unlock();
     }
     return 0;
 }
-
-void adapter_lock1(const char *FILE, int line, int aid) {
-    adapter *ad;
-    ad = get_adapter_nw(aid);
-    if (!ad)
-        return;
-    mutex_lock1(FILE, line, &ad->mutex);
-}
-
-void adapter_unlock1(const char *FILE, int line, int aid) {
-    adapter *ad;
-    ad = get_adapter_nw(aid);
-    if (!ad)
-        return;
-    mutex_unlock1(FILE, line, &ad->mutex);
-}
-
-#if 0
-// unused
-int get_enabled_pids(adapter *ad, int *pids, int lpids)
-{
-	int ep = 0, i;
-
-	for (i = 0; i < MAX_PIDS; i++)
-	{
-		if (ad->pids[i].flags == 1 || ad->pids[i].flags == 2) // enabled or needed to be added
-			pids[ep++] = ad->pids[i].pid;
-		if (ep >= lpids)
-			break;
-	}
-
-	return ep;
-}
-
-// unused
-int get_all_pids(adapter *ad, int *pids, int lpids)
-{
-	int ep = 0, i;
-
-	for (i = 0; i < MAX_PIDS; i++)
-	{
-		if ((ad->pids[i].flags > 0) && (ad->pids[i].flags < 4))
-			pids[ep++] = ad->pids[i].pid;
-		if (ep >= lpids)
-			break;
-	}
-
-	return ep;
-}
-
-#endif
 
 char *get_adapter_pids(int aid, char *dest, int max_size) {
     int len = 0;

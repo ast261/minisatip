@@ -30,8 +30,7 @@
 #include "minisatip.h"
 #include "pmt.h"
 #include "utils.h"
-#include "utils/alloc.h"
-#include "utils/hash_table.h"
+
 #include "utils/ticks.h"
 
 #include <arpa/inet.h>
@@ -398,6 +397,7 @@ int satipc_timeout(sockets *s) {
     adapter *ad;
     satipc *sip;
     get_ad_and_sipr(s->sid, 1);
+    std::lock_guard<SMutex> lock(ad->mutex);
 
     if (sip->rtsp_socket_closed) {
         satipc_open_rtsp_socket(ad, sip);
@@ -590,7 +590,6 @@ int satipc_open_device(adapter *ad) {
         ad->fe_sock = sockets_add(SOCK_TIMEOUT, NULL, ad->id, TYPE_UDP, NULL,
                                   NULL, (socket_action)satipc_timeout);
         sockets_timeout(ad->fe_sock, 25000); // 25s
-        set_sock_lock(ad->fe_sock, &ad->mutex);
     }
     sip->session[0] = 0;
     sip->lap = 0;
@@ -812,7 +811,7 @@ int satipc_read(int socket, void *buf, int len, sockets *ss, int *rb) {
             if (i + 1 < rr) { // move data only if not in the last multibuffer
                               // slice (in this case only adjust the end)
                 // copy data until the end of the buffer over the empty
-                // space to _free the hole
+                // space to free the hole
                 uint8_t *eb = (uint8_t *)iovs[1].iov_base +
                               *rb; // current end of the read buffer
                 uint8_t *sb = (uint8_t *)holes[i]; // end of the valid read data
@@ -861,7 +860,6 @@ int process_rtsp_tcp(sockets *ss, unsigned char *rtsp, int rtsp_len, void *buf,
 int first;
 int satipc_tcp_read(int socket, void *buf, int len, sockets *ss, int *rb) {
     unsigned char *rtsp;
-    sockets tmp_sock;
     int pos;
     int rtsp_len;
     int tmp_len = 0;
@@ -875,7 +873,7 @@ int satipc_tcp_read(int socket, void *buf, int len, sockets *ss, int *rb) {
            sip->tcp_pos, sip->tcp_len, sip->tcp_size, len);
     if (!sip->tcp_data) {
         sip->tcp_size = TCP_DATA_SIZE;
-        sip->tcp_data = (uint8_t *)_malloc(sip->tcp_size + 3);
+        sip->tcp_data = (uint8_t *)malloc(sip->tcp_size + 3);
         if (!sip->tcp_data)
             LOG_AND_RETURN(-1, "Cannot alloc memory for tcp_data with size %d",
                            sip->tcp_size);
@@ -1013,7 +1011,7 @@ int satipc_tcp_read(int socket, void *buf, int len, sockets *ss, int *rb) {
                      sip->tcp_pos);
                 break;
             }
-            memset(&tmp_sock, 0, sizeof(tmp_sock));
+            sockets tmp_sock;
             bytes = nlnl - rtsp;
             sip->tcp_pos += bytes + 4;
             tmp_sock.buf = rtsp;
@@ -1219,7 +1217,7 @@ int http_request(adapter *ad, char *url, const char *method, int force) {
         return 0;
 
     if (sip->expect_reply) {
-        LOG("%s: not sending method %d: url %s", __FUNCTION__, method, url);
+        LOG("%s: not sending method %s: url %s", __FUNCTION__, method, url);
         return 0;
     }
 
@@ -1328,9 +1326,9 @@ int satipc_send_setup(adapter *ad, satipc *sip) {
     return 0;
 }
 
-void satipc_get_pids(adapter *ad, satipc *sip, char *url, int size) {
+void satipc_get_pids(adapter *ad, satipc *sip, char *url, int size,
+                     int send_pids) {
     char tmp_url[1000];
-    int send_pids = 0;
     int len = 0;
 
     // Use pids= only when forced to use pids=
@@ -1382,9 +1380,13 @@ int satipc_send_play(adapter *ad) {
     satipc *sip = get_satip(ad->id);
     int len = 0;
 
+    if (!sip)
+        return 0;
+
     url[0] = 0;
     if (sip->want_tune + sip->lap + sip->ldp + sip->force_pids == 0)
         LOG_AND_RETURN(0, "adapter %d: Nothing to commit", ad->id);
+    int use_pids = 0;
 
     if (sip->want_tune || !sip->sent_transport) {
         tune_url(ad, url, sizeof(url) - 1);
@@ -1392,9 +1394,10 @@ int satipc_send_play(adapter *ad) {
 
         len = strlen(url);
         strcatf(url, len, "&");
+        use_pids = 1;
     }
 
-    satipc_get_pids(ad, sip, url + len, sizeof(url) - len);
+    satipc_get_pids(ad, sip, url + len, sizeof(url) - len, use_pids);
     sip->want_tune = 0;
     http_request(ad, url, "PLAY", 0);
     return 0;
@@ -1454,9 +1457,9 @@ int satipc_request(adapter *ad) {
         (sip->state == SATIP_STATE_SETUP || sip->state == SATIP_STATE_PLAY))
         return 0;
 
-    mutex_lock(&sip->mutex);
+    std::lock_guard<SMutex> lock(sip->mutex);
+
     if (sip->expect_reply) {
-        mutex_unlock(&sip->mutex);
         return 0;
     }
 
@@ -1494,13 +1497,10 @@ int satipc_request(adapter *ad) {
     }
 
     if (err) {
-        mutex_unlock(&sip->mutex);
         return 0;
     }
 
     satipc_send_describe(ad, sip);
-
-    mutex_unlock(&sip->mutex);
 
     return 0;
 }
@@ -1571,9 +1571,7 @@ int add_satip_server(char *host, int port, int fe, char delsys, char *source_ip,
             if (!a[i])
                 a[i] = adapter_alloc();
             if (!satip[i]) {
-                satip[i] = (satipc *)_malloc(sizeof(satipc));
-                if (satip[i])
-                    memset(satip[i], 0, sizeof(satipc));
+                satip[i] = new satipc();
             }
             if (a[i] && satip[i])
                 break;
@@ -1583,8 +1581,7 @@ int add_satip_server(char *host, int port, int fe, char delsys, char *source_ip,
 
     sip = satip[i];
     ad = a[i];
-    mutex_init(&sip->mutex);
-    mutex_lock(&ad->mutex);
+    std::lock_guard<SMutex> lock(ad->mutex);
     ad->id = i;
     ad->open = satipc_open_device;
     ad->set_pid = satipc_set_pid;
@@ -1634,7 +1631,6 @@ int add_satip_server(char *host, int port, int fe, char delsys, char *source_ip,
         "devices %d",
         ad->id, sip->sip, sip->sport, ad->sys[0], get_delsys(ad->sys[0]),
         get_delsys(ad->sys[1]), sip->satip_fe, a_count);
-    mutex_unlock(&ad->mutex);
 
     return sip->id;
 }
@@ -1840,7 +1836,7 @@ int satip_getxml(void *x) {
 }
 
 char *init_satip_pointer(int len) {
-    char *p = (char *)_malloc(len);
+    char *p = (char *)malloc(len);
     if (p)
         p[0] = 0;
     else
@@ -1850,4 +1846,6 @@ char *init_satip_pointer(int len) {
 
 _symbols satipc_sym[] = {{"ad_satip", VAR_AARRAY_STRING, satip, 1, MAX_ADAPTERS,
                           offsetof(satipc, sip)},
+                         {"ad_satip_use_tcp", VAR_AARRAY_UINT8, satip, 1,
+                          MAX_ADAPTERS, offsetof(satipc, use_tcp)},
                          {NULL, 0, NULL, 0, 0, 0}};

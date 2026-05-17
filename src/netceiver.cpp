@@ -21,7 +21,7 @@
 #ifndef DISABLE_NETCVCLIENT
 
 #include "netceiver.h"
-#include "utils/alloc.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
@@ -43,11 +43,11 @@ int m_logskipmask = 0;
 
 extern char *fe_pilot[];
 extern char *fe_rolloff[];
-extern char *fe_delsys[];
-extern char *fe_fec[];
-extern char *fe_modulation[];
-extern char *fe_tmode[];
-extern char *fe_gi[];
+extern const char *fe_delsys[];
+extern const char *fe_fec[];
+extern const char *fe_modulation[];
+extern const char *fe_tmode[];
+extern const char *fe_gi[];
 extern char *fe_hierarchy[];
 extern char *fe_pol[];
 
@@ -127,9 +127,11 @@ int netcv_del_pid(adapter *ad, int fd, int pid) {
 
 int netcv_commit(adapter *ad) {
     int i;
+    LOG("netceiver: call netcv_commit for adapter %d want_tune=%d", ad->id,
+        SN->want_tune);
 
     int m_pos = 0;
-    fe_type_t type = 0;
+    fe_type_t type = (fe_type_t)0;
     recv_sec_t m_sec;
     struct dvb_frontend_parameters m_fep;
     dvb_pid_t m_pids[MAX_PIDS];
@@ -149,20 +151,26 @@ int netcv_commit(adapter *ad) {
         if (!SN->ncv_rec)
             SN->err = 1;
 
+        /* looks like worked in the past but found need to be
+         * disabled 2025-08-08 - in case issues will be reported this needs to
+         * be toggled by option to cover both use cases
         SN->want_tune = 0; // wait until netcv_tune triggers the tuning
+         */
     }
 
     /* tune receiver to a new frequency / tranponder */
     if (SN->want_tune) {
         transponder *tp = &ad->tp;
+        LOG("netceiver: netcv_commit tune tp->sys=%d", tp->sys);
 
         int map_pos[] = {0, 192, 130, 282,
                          -50}; // Default sat positions: 19.2E, 13E, 28.2E, 5W
-        int map_pol[] = {0, SEC_VOLTAGE_13, SEC_VOLTAGE_18, SEC_VOLTAGE_OFF};
+        fe_sec_voltage_t map_pol[] = {(fe_sec_voltage_t)0, SEC_VOLTAGE_13,
+                                      SEC_VOLTAGE_18, SEC_VOLTAGE_OFF};
 
         switch (tp->sys) {
         case SYS_DVBS:
-        case SYS_DVBS2:
+        case SYS_DVBS2: {
             m_pos = 1800 + map_pos[tp->diseqc];
 
             memset(&m_sec, 0, sizeof(recv_sec_t));
@@ -180,11 +188,11 @@ int netcv_commit(adapter *ad) {
                 switch (tp->fec) // Handle FEC numbering exceptions
                 {
                 case FEC_3_5:
-                    m_fep.u.qpsk.fec_inner = 13;
+                    m_fep.u.qpsk.fec_inner = (fe_code_rate_t)13;
                     break;
 
                 case FEC_9_10:
-                    m_fep.u.qpsk.fec_inner = 14;
+                    m_fep.u.qpsk.fec_inner = (fe_code_rate_t)14;
                     break;
 
                 default:
@@ -193,13 +201,17 @@ int netcv_commit(adapter *ad) {
 
                 // Für DVB-S2 PSK8 oder QPSK, siehe vdr-mcli-plugin/device.c
                 if (tp->mtype)
-                    m_fep.u.qpsk.fec_inner |= (PSK8 << 16);
+                    m_fep.u.qpsk.fec_inner =
+                        (fe_code_rate_t)(m_fep.u.qpsk.fec_inner | (PSK8 << 16));
                 else
-                    m_fep.u.qpsk.fec_inner |= (QPSK_S2 << 16);
-                type = FE_DVBS2;
+                    m_fep.u.qpsk.fec_inner =
+                        (fe_code_rate_t)(m_fep.u.qpsk.fec_inner |
+                                         (QPSK_S2 << 16));
+                type = (fe_type_t)FE_DVBS2;
             }
 
-            char *map_posc[] = {"", " @ 19.2E", " @ 13E", " @ 28.2E", " @ 5W"};
+            const char *map_posc[] = {"", " @ 19.2E", " @ 13E", " @ 28.2E",
+                                      " @ 5W"};
             LOG("netceiver: adapter %d tuning to %d%s pol:%s sr:%d fec:%s "
                 "delsys:%s "
                 "mod:%s",
@@ -214,6 +226,7 @@ int netcv_commit(adapter *ad) {
             // unreachable code
             //			m_fep.u.qpsk.fec_inner |= (tp->ro << 24);
             //			break;
+        }
 
         case SYS_DVBC_ANNEX_A:
             m_pos = 0xfff; /* not sure, to be tested */
@@ -293,6 +306,11 @@ int netcv_commit(adapter *ad) {
                 tp->tmode, tp->gi, tp->bw, tp->sm, tp->t2id);
 
             break;
+
+        default:
+            LOG("netceiver: adapter %d tuning not supported for type %d",
+                tp->sys)
+            break;
         }
 
         memset(m_pids, 0, sizeof(m_pids));
@@ -334,6 +352,7 @@ int netcv_commit(adapter *ad) {
 
 int netcv_tune(int aid, transponder *tp) {
     adapter *ad = get_adapter(aid);
+    LOG("netceiver: called netcv_tune for adapter %d", ad->id);
     if (!ad)
         return 1;
 
@@ -345,7 +364,7 @@ int netcv_tune(int aid, transponder *tp) {
 }
 
 fe_delivery_system_t netcv_delsys(int aid, int fd, fe_delivery_system_t *sys) {
-    return 0;
+    return SYS_UNDEFINED;
 }
 
 void find_netcv_adapter(adapter **a) {
@@ -433,7 +452,7 @@ void find_netcv_adapter(adapter **a) {
         if (!a[na])
             a[na] = adapter_alloc();
         if (!sn[na])
-            sn[na] = _malloc(sizeof(SNetceiver));
+            sn[na] = (SNetceiver *)malloc(sizeof(SNetceiver));
 
         ad = a[na];
         ad->pa = 0;
@@ -461,7 +480,7 @@ void find_netcv_adapter(adapter **a) {
 
         /* register delivery system type */
         for (k = 0; k < 10; k++)
-            ad->sys[k] = 0;
+            ad->sys[k] = SYS_UNDEFINED;
         switch (map_type[i]) {
         case FE_DVBS2:
             ad->sys[0] = SYS_DVBS2;
@@ -505,7 +524,7 @@ void find_netcv_adapter(adapter **a) {
  */
 
 int handle_ts(unsigned char *buffer, size_t len, void *p) {
-    SNetceiver *nc = p;
+    SNetceiver *nc = (SNetceiver *)p;
     size_t lw;
 
     if (nc->lp == 0)
@@ -513,7 +532,7 @@ int handle_ts(unsigned char *buffer, size_t len, void *p) {
 
     /* simple data format check */
     if (buffer[0] != 0x47 || len % 188 != 0) {
-        LOG("netceiver: TS data mallformed: buf[0]=0x%02x len=%lu", buffer[0],
+        LOG("netceiver: TS data malformed: buf[0]=0x%02x len=%lu", buffer[0],
             len);
         return len;
     }
@@ -528,7 +547,7 @@ int handle_ts(unsigned char *buffer, size_t len, void *p) {
 
 /* Handle signal status information */
 int handle_ten(tra_t *ten, void *p) {
-    adapter *ad = p;
+    adapter *ad = (adapter *)p;
     recv_festatus_t *festat;
 
     if (ten) {

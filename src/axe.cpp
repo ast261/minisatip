@@ -715,13 +715,14 @@ int axe_get_signal(adapter *ad) {
         tmp = 0;
     snr = tmp;
 
-    // Lock the adapter while doing changes
-    adapter_lock(ad->id);
-    ad->snr = snr;
-    ad->db = db;
-    ad->strength = strength;
-    ad->status = status;
-    ad->ber = ber;
+    {
+        std::lock_guard<SMutex> lock(ad->mutex);
+        ad->snr = snr;
+        ad->db = db;
+        ad->strength = strength;
+        ad->status = status;
+        ad->ber = ber;
+    }
 
     if (ad->status == 0 &&
         ((ad->tp.diseqc_param.switch_type == SWITCH_JESS) ||
@@ -729,7 +730,6 @@ int axe_get_signal(adapter *ad) {
         axe_setup_switch(ad);
     }
 
-    adapter_unlock(ad->id);
     return 0;
 }
 

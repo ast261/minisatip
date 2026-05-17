@@ -50,7 +50,6 @@
 #define MAX_KEY_FILTERS 20
 typedef struct struct_key {
     char enabled;
-    SMutex mutex;
     int pmt_id;
     int algo;
     unsigned char cw[2][16];
@@ -91,7 +90,6 @@ int keys_del(int i);
 int dvbapi_process_pmt(unsigned char *b, adapter *ad);
 void dvbapi_pid_add(adapter *a, int pid, SPid *cp, int existing);
 void dvbapi_pid_del(adapter *a, int pid, SPid *cp);
-void dvbapi_delete_keys_for_adapter(int aid);
 void register_dvbapi();
 void unregister_dvbapi();
 void send_client_info(sockets *s);
