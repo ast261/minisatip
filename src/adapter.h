@@ -184,6 +184,9 @@ int tune(int aid, int sid);
 void post_tune(adapter *ad);
 SPid *find_pid(int aid, int p);
 adapter *get_adapter1(int aid, const char *file, int line);
+#ifndef AXE
+inline adapter *get_configured_adapter_nw(int aid);
+#endif
 char *describe_adapter(int sid, int aid, char *dad, int ld);
 void dump_pids(int aid);
 void sort_pids(int aid);
