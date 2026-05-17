@@ -127,6 +127,13 @@ struct struct_adapter {
     char drop_encrypted;
     char failed_adapter; // failed adapters will not be closed due to timeout
                          // nor chosen in get_free_adapters
+#ifdef AXE
+    int fe2;
+    int64_t axe_vdevice_last_sync;
+    int64_t axe_pktc;
+    int64_t axe_ccerr;
+    int axe_used;
+#endif
 #ifndef DISABLE_PMT
     int transponder_id, pat_ver, pat_filter, sdt_filter;
     // keeps the PMTs that are present in the PAT
@@ -177,7 +184,6 @@ int tune(int aid, int sid);
 void post_tune(adapter *ad);
 SPid *find_pid(int aid, int p);
 adapter *get_adapter1(int aid, const char *file, int line);
-inline adapter *get_configured_adapter_nw(int aid);
 char *describe_adapter(int sid, int aid, char *dad, int ld);
 void dump_pids(int aid);
 void sort_pids(int aid);
@@ -201,6 +207,11 @@ char *get_adapter_pids(int aid, char *dest, int max_size);
 int adapter_timeout(sockets *s);
 void adapter_set_dvr(adapter *ad);
 char is_adapter_disabled(int i);
+inline adapter *get_configured_adapter_nw(int aid) {
+    if (aid < 0 || aid >= MAX_ADAPTERS || !a[aid] || is_adapter_disabled(aid))
+        return NULL;
+    return a[aid];
+}
 void set_adapters_delsys(char *o);
 void set_lnb_adapters(char *o);
 void set_signal_multiplier(char *o);
