@@ -676,8 +676,6 @@ int axe_set_pid(adapter *ad, int i_pid) {
 }
 
 int axe_del_filters(adapter *ad, int fd, int pid) {
-    if (a == NULL)
-        return 0; /* closed */
     if ((fd & 0xffff) != pid)
         LOG_AND_RETURN(0, "AXE PID remove on an invalid handle %d, pid %d", fd,
                        pid);
