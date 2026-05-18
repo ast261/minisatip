@@ -719,7 +719,7 @@ void set_options(int argc, char *argv[]) {
 #endif
 #ifdef AXE
     opts.no_threads = 1;
-    opts.document_root = "/usr/share/minisatip/html";
+    opts.document_root = "/usr/share/minisatip-legacy/html";
 #endif
 
     opts.name_app = app_name;
