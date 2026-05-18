@@ -250,7 +250,12 @@ if(STATIC)
 endif()
 
 target_link_libraries(minisatip PRIVATE ${MINISATIP_LIBS})
-install(TARGETS minisatip RUNTIME DESTINATION bin)
+if(AXE)
+    install(TARGETS minisatip RUNTIME DESTINATION sbin)
+    install(DIRECTORY html DESTINATION share/minisatip)
+else()
+    install(TARGETS minisatip RUNTIME DESTINATION bin)
+endif()
 
 # Testing
 if(BUILD_TESTING)
