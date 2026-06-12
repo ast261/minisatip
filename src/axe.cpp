@@ -182,20 +182,23 @@ static void axe_pls_isi(adapter *ad, transponder *tp) {
     static int isi[4] = {-2, -2, -2, -2};
     static int pls_code[4] = {-2, -2, -2, -2};
     int v;
-    LOGM("axe: isi %d pls %d mode %d", tp->plp_isi, tp->pls_code, tp->pls_mode);
-    if (tp->plp_isi != isi[ad->pa]) {
-        v = tp->plp_isi < 0 ? -1 : (tp->plp_isi & 0xff);
+    int isi_val = tp->plp_isi.value_or(-1);
+    int pls_code_val = tp->pls_code.value_or(-1);
+    int pls_mode_val = tp->pls_mode.has_value() ? (int)tp->pls_mode.value() : -1;
+    LOGM("axe: isi %d pls %d mode %d", isi_val, pls_code_val, pls_mode_val);
+    if (isi_val != isi[ad->pa]) {
+        v = isi_val < 0 ? -1 : (isi_val & 0xff);
         axe_stv0900_i2c_4("mis", ad->pa, v);
-        isi[ad->pa] = tp->plp_isi;
+        isi[ad->pa] = isi_val;
     }
-    if (tp->pls_code != pls_code[ad->pa]) {
-        v = tp->pls_code < 0 ? 0 : (tp->pls_code & 0x3ffff);
-        if (tp->pls_mode == PLS_MODE_GOLD || tp->pls_mode < 0)
+    if (pls_code_val != pls_code[ad->pa]) {
+        v = pls_code_val < 0 ? 0 : (pls_code_val & 0x3ffff);
+        if (pls_mode_val == PLS_MODE_GOLD || pls_mode_val < 0)
             v |= 0x40000;
-        else if (tp->pls_mode == PLS_MODE_COMBO)
+        else if (pls_mode_val == PLS_MODE_COMBO)
             v |= 0x80000; /* really? */
         axe_stv0900_i2c_4("pls", ad->pa, v);
-        pls_code[ad->pa] = tp->pls_code;
+        pls_code[ad->pa] = pls_code_val;
     }
 }
 
@@ -274,7 +277,7 @@ adapter *axe_use_adapter(int input) {
 
 int axe_tune_check(adapter *ad, transponder *tp, diseqc *diseqc_param,
                    int diseqc) {
-    int pol = (tp->pol - 1) & 1;
+    int pol = (tp->pol.value_or(0) - 1) & 1;
     int hiband = get_lnb_hiband(tp, diseqc_param);
     LOGM(
         "axe: tune check for adapter %d, pol %d/%d, hiband %d/%d, diseqc %d/%d",
@@ -296,8 +299,8 @@ int axe_setup_switch(adapter *ad) {
 
     int hiband;
     int freq;
-    int diseqc = (tp->diseqc > 0) ? tp->diseqc - 1 : 0;
-    int pol = (tp->pol - 1) & 1;
+    int diseqc = (tp->diseqc.value_or(0) > 0) ? tp->diseqc.value_or(0) - 1 : 0;
+    int pol = (tp->pol.value_or(0) - 1) & 1;
 
     adapter *ad2, *adm;
     int input = 0, aid, pos = 0, equattro = 0, master = -1;
@@ -317,7 +320,7 @@ int axe_setup_switch(adapter *ad) {
             if (absolute_switch && diseqc >= 0 && diseqc < MAX_SOURCES) {
                 /* reuse input */
                 for (aid = 0; aid < 4; aid++) {
-                    pos = get_absolute_source_for_adapter(aid, tp->diseqc,
+                    pos = get_absolute_source_for_adapter(aid, tp->diseqc.value_or(0),
                                                           SYS_DVBS);
                     if (pos <= 0)
                         continue;
@@ -336,8 +339,8 @@ int axe_setup_switch(adapter *ad) {
                 /* find _free input */
                 if (aid >= 4) {
                     for (aid = 0; aid < 4; aid++) {
-                        pos = get_absolute_source_for_adapter(aid, tp->diseqc,
-                                                              SYS_DVBS);
+                        pos = get_absolute_source_for_adapter(
+                            aid, tp->diseqc.value_or(0), SYS_DVBS);
                         if (pos <= 0)
                             continue;
                         pos--;
@@ -519,7 +522,7 @@ int axe_tune(int aid, transponder *tp) {
     int iProp = 0;
     int fd_frontend;
 
-    int freq = tp->freq;
+    int freq = tp->freq.value_or(0);
     struct dtv_property p_cmd[20];
     struct dtv_properties p = {.num = 0, .props = p_cmd};
     struct dvb_frontend_event ev;
@@ -553,7 +556,7 @@ int axe_tune(int aid, transponder *tp) {
         //        return -1;
     }
 
-    switch (tp->sys) {
+    switch (tp->sys.value_or(SYS_UNDEFINED)) {
     case SYS_DVBS:
     case SYS_DVBS2:
       {
@@ -565,81 +568,99 @@ int axe_tune(int aid, transponder *tp) {
         if (freq < MIN_FRQ_DVBS || freq > MAX_FRQ_DVBS)
             LOG_AND_RETURN(-404, "Frequency %d is not within range ", freq)
 
-        ADD_PROP(DTV_SYMBOL_RATE, tp->sr)
-        ADD_PROP(DTV_INNER_FEC, tp->fec)
-        if (tp->plp_isi >= 0) {
-            ADD_PROP(DTV_STREAM_ID, tp->plp_isi & 0xFF)
-            strcatf(plp_desc, len, "stream_id = %d", tp->plp_isi & 0xFF);
+        ADD_PROP(DTV_SYMBOL_RATE, tp->sr.value_or(0))
+        ADD_PROP(DTV_INNER_FEC, tp->fec.value_or(FEC_AUTO))
+        if (tp->plp_isi.has_value()) {
+            ADD_PROP(DTV_STREAM_ID, tp->plp_isi.value() & 0xFF)
+            strcatf(plp_desc, len, "stream_id = %d", tp->plp_isi.value() & 0xFF);
         }
         ADD_PROP(DTV_SCRAMBLING_SEQUENCE_INDEX, pls_scrambling_index(tp))
         strcatf(plp_desc, len, "sequence_index = %d", pls_scrambling_index(tp));
 
         LOG("tuning to %d(%d) pol: %s (%d) sr:%d fec:%s delsys:%s mod:%s "
             "rolloff:%s pilot:%s, ts clear=%jd, ts pol=%jd %s",
-            tp->freq, freq, get_pol(tp->pol), tp->pol, tp->sr, fe_fec[tp->fec],
-            fe_delsys[tp->sys], fe_modulation[tp->mtype], "auto", "auto",
-            bclear, bpol, plp_desc)
+            tp->freq.value_or(0), freq,
+            fe_pol_map.reverse_lookup(tp->pol.value_or(0)).data(),
+            tp->pol.value_or(0), tp->sr.value_or(0),
+            fe_fec_map.reverse_lookup(tp->fec.value_or(FEC_AUTO)).data(),
+            fe_delsys_map.reverse_lookup(tp->sys.value_or(SYS_UNDEFINED)).data(),
+            fe_modulation_map.reverse_lookup(tp->mtype.value_or(QAM_AUTO)).data(),
+            "auto", "auto", bclear, bpol, plp_desc)
       }
         break;
 
     case SYS_DVBT:
     case SYS_DVBT2:
 
-        if (tp->freq < MIN_FRQ_DVBT || tp->freq > MAX_FRQ_DVBT)
-            LOG_AND_RETURN(-404, "Frequency %d is not within range ", tp->freq)
+        if (tp->freq.value_or(0) < MIN_FRQ_DVBT ||
+            tp->freq.value_or(0) > MAX_FRQ_DVBT)
+            LOG_AND_RETURN(-404, "Frequency %d is not within range ",
+                           tp->freq.value_or(0))
 
         freq = freq * 1000;
-        ADD_PROP(DTV_BANDWIDTH_HZ, tp->bw)
-        ADD_PROP(DTV_CODE_RATE_HP, tp->fec)
-        ADD_PROP(DTV_CODE_RATE_LP, tp->fec)
-        ADD_PROP(DTV_GUARD_INTERVAL, tp->gi)
-        ADD_PROP(DTV_TRANSMISSION_MODE, tp->tmode)
+        ADD_PROP(DTV_BANDWIDTH_HZ, tp->bw.value_or(8000000))
+        ADD_PROP(DTV_CODE_RATE_HP, tp->fec.value_or(FEC_AUTO))
+        ADD_PROP(DTV_CODE_RATE_LP, tp->fec.value_or(FEC_AUTO))
+        ADD_PROP(DTV_GUARD_INTERVAL, tp->gi.value_or(GUARD_INTERVAL_AUTO))
+        ADD_PROP(DTV_TRANSMISSION_MODE, tp->tmode.value_or(TRANSMISSION_MODE_AUTO))
         ADD_PROP(DTV_HIERARCHY, HIERARCHY_AUTO)
 #if DVBAPIVERSION >= 0x0502
-        if (tp->plp_isi >= 0)
-            ADD_PROP(DTV_STREAM_ID, tp->plp_isi & 0xFF)
+        if (tp->plp_isi.has_value())
+            ADD_PROP(DTV_STREAM_ID, tp->plp_isi.value() & 0xFF)
 #endif
 
         LOG("tuning to %d delsys: %s bw:%d inversion:%s mod:%s fec:%s guard:%s "
             "transmission: %s, ts clear = %jd",
-            freq, fe_delsys[tp->sys], tp->bw, fe_inversion[tp->inversion],
-            fe_modulation[tp->mtype], fe_fec[tp->fec], fe_gi[tp->gi],
-            fe_tmode[tp->tmode], bclear)
+            freq,
+            fe_delsys_map.reverse_lookup(tp->sys.value_or(SYS_UNDEFINED)).data(),
+            tp->bw.value_or(0),
+            fe_inversion_map.reverse_lookup(tp->inversion.value_or(INVERSION_AUTO)).data(),
+            fe_modulation_map.reverse_lookup(tp->mtype.value_or(QAM_AUTO)).data(),
+            fe_fec_map.reverse_lookup(tp->fec.value_or(FEC_AUTO)).data(),
+            fe_gi_map.reverse_lookup(tp->gi.value_or(GUARD_INTERVAL_AUTO)).data(),
+            fe_tmode_map.reverse_lookup(tp->tmode.value_or(TRANSMISSION_MODE_AUTO)).data(),
+            bclear)
         break;
 
     case SYS_DVBC2:
     case SYS_DVBC_ANNEX_A:
 
-        if (tp->freq < MIN_FRQ_DVBC || tp->freq > MAX_FRQ_DVBC)
-            LOG_AND_RETURN(-404, "Frequency %d is not within range ", tp->freq)
+        if (tp->freq.value_or(0) < MIN_FRQ_DVBC ||
+            tp->freq.value_or(0) > MAX_FRQ_DVBC)
+            LOG_AND_RETURN(-404, "Frequency %d is not within range ",
+                           tp->freq.value_or(0))
 
         freq = freq * 1000;
-        ADD_PROP(DTV_SYMBOL_RATE, tp->sr)
+        ADD_PROP(DTV_SYMBOL_RATE, tp->sr.value_or(0))
 #if DVBAPIVERSION >= 0x0502
-        if (tp->plp_isi >= 0) {
-            int v = tp->plp_isi & 0xFF;
-            if (tp->ds >= 0)
-                v |= (tp->ds & 0xFF) << 8;
+        if (tp->plp_isi.has_value()) {
+            int v = tp->plp_isi.value() & 0xFF;
+            if (tp->ds.has_value())
+                v |= (tp->ds.value() & 0xFF) << 8;
             ADD_PROP(DTV_STREAM_ID, v);
         }
 #endif
         // valid for DD DVB-C2 devices
 
         LOG("tuning to %d sr:%d specinv:%s delsys:%s mod:%s ts clear = %jd",
-            freq, tp->sr, fe_inversion[tp->inversion], fe_delsys[tp->sys],
-            fe_modulation[tp->mtype], bclear)
+            freq, tp->sr.value_or(0),
+            fe_inversion_map.reverse_lookup(tp->inversion.value_or(INVERSION_AUTO)).data(),
+            fe_delsys_map.reverse_lookup(tp->sys.value_or(SYS_UNDEFINED)).data(),
+            fe_modulation_map.reverse_lookup(tp->mtype.value_or(QAM_AUTO)).data(),
+            bclear)
         break;
 
     default:
-        LOG("tuning to unknown delsys: %s freq %s ts clear = %jd",
-            fe_delsys[tp->sys], freq, bclear)
+        LOG("tuning to unknown delsys: %s freq %d ts clear = %jd",
+            fe_delsys_map.reverse_lookup(tp->sys.value_or(SYS_UNDEFINED)).data(),
+            freq, bclear)
         break;
     }
 
     ADD_PROP(DTV_FREQUENCY, freq)
-    ADD_PROP(DTV_INVERSION, tp->inversion)
-    ADD_PROP(DTV_MODULATION, tp->mtype);
-    ADD_PROP(DTV_DELIVERY_SYSTEM, tp->sys);
+    ADD_PROP(DTV_INVERSION, tp->inversion.value_or(INVERSION_AUTO))
+    ADD_PROP(DTV_MODULATION, tp->mtype.value_or(QAM_AUTO));
+    ADD_PROP(DTV_DELIVERY_SYSTEM, tp->sys.value_or(SYS_UNDEFINED));
     ADD_PROP(DTV_TUNE, 0)
 
     p.num = iProp;
